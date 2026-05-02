@@ -1,0 +1,394 @@
+<Window x:Class="NetClipboard.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:NetClipboard"
+        Title="NetClipboard" Height="650" Width="540"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource ThemeBase}">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <local:EncryptedLockedConverter x:Key="EncryptedLockedVis"/>
+        <local:EncryptedLockedInverseConverter x:Key="EncryptedLockedInverseVis"/>
+        <BlurEffect x:Key="EncryptedBlur" Radius="8"/>
+
+        <!-- Dark flat button style -->
+        <Style x:Key="DarkBtn" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource ThemeSurface0}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeSurface2}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface2}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- TabItem style -->
+        <Style TargetType="TabItem">
+            <Setter Property="Background" Value="{DynamicResource ThemeSurface0}"/>
+            <Setter Property="Foreground" Value="{DynamicResource ThemeSubtext0}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ThemeSurface1}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBd" Background="{DynamicResource ThemeSurface0}"
+                                BorderBrush="{DynamicResource ThemeSurface1}" BorderThickness="1,1,1,0"
+                                CornerRadius="4,4,0,0" Padding="10,4" Margin="0,0,2,0">
+                            <ContentPresenter ContentSource="Header"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="TabBd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                                <Setter Property="Foreground" Value="{DynamicResource ThemeText}"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsSelected" Value="False"/>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="TabBd" Property="Background" Value="{DynamicResource ThemeTabHover}"/>
+                            </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Local item: lock + share toggle + text + copy -->
+        <DataTemplate x:Key="LocalEntryTemplate">
+            <Border x:Name="ItemBorder" Background="{DynamicResource ThemeSurface1}"
+                    BorderBrush="{DynamicResource ThemeSurface2}" BorderThickness="1.5"
+                    CornerRadius="6" Padding="10,8" Margin="0,0,0,6">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Lock toggle -->
+                    <ToggleButton Grid.Column="0" IsChecked="{Binding IsEncrypted}"
+                                  Click="LockToggle_Click"
+                                  VerticalAlignment="Top" Margin="0,0,4,0"
+                                  ToolTip="Encrypt before sharing">
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="Bd" Background="{DynamicResource ThemeSurface0}"
+                                                    CornerRadius="6" Width="36" Height="36"
+                                                    BorderBrush="Transparent" BorderThickness="1">
+                                                <TextBlock x:Name="Ico" Text="&#xE72E;"
+                                                           FontFamily="Segoe MDL2 Assets" FontSize="15"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource ThemeOverlay0}"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface1}"/>
+                                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ThemeYellow}"/>
+                                                    <Setter TargetName="Ico" Property="Foreground" Value="{DynamicResource ThemeYellow}"/>
+                                                </Trigger>
+                                                <MultiTrigger>
+                                                    <MultiTrigger.Conditions>
+                                                        <Condition Property="IsChecked" Value="False"/>
+                                                        <Condition Property="IsMouseOver" Value="True"/>
+                                                    </MultiTrigger.Conditions>
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface2}"/>
+                                                </MultiTrigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ToggleButton.Style>
+                    </ToggleButton>
+
+                    <!-- Share toggle -->
+                    <ToggleButton Grid.Column="1" IsChecked="{Binding IsShared}"
+                                  Click="ShareToggle_Click"
+                                  VerticalAlignment="Top" Margin="0,0,8,0"
+                                  ToolTip="Sync to peers">
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="Bd" Background="{DynamicResource ThemeSurface0}"
+                                                    CornerRadius="6" Width="36" Height="36"
+                                                    BorderBrush="Transparent" BorderThickness="1">
+                                                <TextBlock x:Name="Ico" Text="&#xE72D;"
+                                                           FontFamily="Segoe MDL2 Assets" FontSize="15"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource ThemeOverlay0}"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeBlue}"/>
+                                                    <Setter TargetName="Ico" Property="Foreground" Value="{DynamicResource ThemeShareIconOn}"/>
+                                                </Trigger>
+                                                <MultiTrigger>
+                                                    <MultiTrigger.Conditions>
+                                                        <Condition Property="IsChecked" Value="False"/>
+                                                        <Condition Property="IsMouseOver" Value="True"/>
+                                                    </MultiTrigger.Conditions>
+                                                    <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface2}"/>
+                                                </MultiTrigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ToggleButton.Style>
+                    </ToggleButton>
+
+                    <!-- Text preview -->
+                    <StackPanel Grid.Column="2" Margin="0,0,8,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="LocalText" Text="{Binding DisplayText}"
+                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                   FontSize="13" Foreground="{DynamicResource ThemeText}"/>
+                        <TextBlock Text="{Binding TimestampStr}" Foreground="{DynamicResource ThemeOverlay0}"
+                                   FontSize="11" Margin="0,4,0,0"/>
+                    </StackPanel>
+
+                    <!-- Copy (hidden when encrypted and not decrypted) -->
+                    <Button x:Name="LocalCopyBtn" Grid.Column="3" Content="Copy"
+                            Style="{StaticResource DarkBtn}"
+                            VerticalAlignment="Top"
+                            Click="CopyItem_Click" Tag="{Binding Text}"
+                            Padding="10,4"/>
+
+                    <!-- Delete -->
+                    <Button Grid.Column="4" Click="DeleteItem_Click"
+                            VerticalAlignment="Top" Padding="4,4" Cursor="Hand"
+                            Margin="2,0,0,0" ToolTip="Delete"
+                            Background="Transparent" BorderThickness="0">
+                        <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12" Foreground="{DynamicResource ThemeOverlay0}"/>
+                    </Button>
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding IsShared}" Value="True">
+                    <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{DynamicResource ThemeBlue}"/>
+                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource ThemeCardHighlight}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsEncrypted}" Value="True">
+                    <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{DynamicResource ThemeYellow}"/>
+                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource ThemeCardHighlight}"/>
+                </DataTrigger>
+                <!-- Blur text + hide Copy when encrypted and not decrypted -->
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsEncrypted}" Value="True"/>
+                        <Condition Binding="{Binding IsDecrypted}" Value="False"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter TargetName="LocalText" Property="Effect"
+                            Value="{StaticResource EncryptedBlur}"/>
+                    <Setter TargetName="LocalCopyBtn" Property="Visibility" Value="Collapsed"/>
+                </MultiDataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- Remote item: text + copy / blur + unlock -->
+        <DataTemplate x:Key="RemoteEntryTemplate">
+            <Border Background="{DynamicResource ThemeSurface1}" BorderBrush="{DynamicResource ThemeSurface2}" BorderThickness="1"
+                    CornerRadius="6" Padding="10,8" Margin="0,0,0,6">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Text preview — blurred when encrypted+locked -->
+                    <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                        <TextBlock x:Name="RemoteText" Text="{Binding DisplayText}"
+                                   TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                   FontSize="13" Foreground="{DynamicResource ThemeText}"/>
+                        <TextBlock Text="{Binding TimestampStr}" Foreground="{DynamicResource ThemeOverlay0}"
+                                   FontSize="11" Margin="0,4,0,0"/>
+                    </StackPanel>
+
+                    <!-- Copy button (hidden when encrypted+locked) -->
+                    <Button x:Name="CopyBtn" Grid.Column="1" Content="Copy"
+                            Style="{StaticResource DarkBtn}"
+                            VerticalAlignment="Top"
+                            Click="CopyItem_Click" Tag="{Binding Text}"
+                            Padding="10,4"
+                            Visibility="{Binding IsEncrypted, Converter={StaticResource EncryptedLockedInverseVis}}"/>
+
+                    <!-- Unlock button (shown when encrypted+locked) -->
+                    <Button x:Name="UnlockBtn" Grid.Column="1"
+                            Style="{StaticResource DarkBtn}"
+                            VerticalAlignment="Top"
+                            Click="UnlockButton_Click"
+                            Padding="6,4"
+                            ToolTip="Decrypt with password"
+                            Visibility="{Binding IsEncrypted, Converter={StaticResource EncryptedLockedVis}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE785;" FontFamily="Segoe MDL2 Assets"
+                                       FontSize="14" Foreground="{DynamicResource ThemeText}"
+                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="Unlock" Foreground="{DynamicResource ThemeText}"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Delete -->
+                    <Button Grid.Column="2" Click="DeleteItem_Click"
+                            VerticalAlignment="Top" Padding="4,4" Cursor="Hand"
+                            Margin="2,0,0,0" ToolTip="Delete"
+                            Background="Transparent" BorderThickness="0">
+                        <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="12" Foreground="{DynamicResource ThemeOverlay0}"/>
+                    </Button>
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <!-- Blur text when encrypted and not yet decrypted -->
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsEncrypted}" Value="True"/>
+                        <Condition Binding="{Binding IsDecrypted}" Value="False"/>
+                    </MultiDataTrigger.Conditions>
+                    <Setter TargetName="RemoteText" Property="Effect"
+                            Value="{StaticResource EncryptedBlur}"/>
+                </MultiDataTrigger>
+                <!-- Once decrypted, show copy and hide unlock -->
+                <DataTrigger Binding="{Binding IsDecrypted}" Value="True">
+                    <Setter TargetName="CopyBtn" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="UnlockBtn" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0" Background="{DynamicResource ThemeCrust}" CornerRadius="6"
+                Padding="14,10" Margin="0,0,0,10">
+            <StackPanel>
+                <TextBlock Text="NetClipboard" Foreground="{DynamicResource ThemeText}"
+                           FontSize="16" FontWeight="Bold"/>
+                <TextBlock x:Name="HeaderInfo" Foreground="{DynamicResource ThemeSubtext0}"
+                           FontSize="12" Margin="0,2,0,0"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Master password toolbar -->
+        <Border Grid.Row="1" Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}"
+                BorderThickness="1" CornerRadius="4" Padding="6,4" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" Click="SetMasterPassword_Click"
+                        Style="{StaticResource DarkBtn}"
+                        ToolTip="Set master password" Padding="6,4"
+                        VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE192;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="14" Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock Text="Key" Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="1" Click="AddPeer_Click"
+                        Style="{StaticResource DarkBtn}"
+                        ToolTip="Connect to peer by IP" Padding="6,4"
+                        VerticalAlignment="Center" Margin="4,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="14" Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock Text="Peer" Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="2" Click="ClearTab_Click"
+                        Style="{StaticResource DarkBtn}"
+                        ToolTip="Clear current tab" Padding="6,4"
+                        VerticalAlignment="Center" Margin="4,0,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="14" Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock Text="Clear" Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Theme toggle button -->
+                <Button Grid.Column="3" x:Name="ThemeToggleBtn" Click="ThemeToggle_Click"
+                        Style="{StaticResource DarkBtn}"
+                        ToolTip="Theme: System" Padding="6,4"
+                        VerticalAlignment="Center" Margin="4,0,0,0">
+                    <TextBlock x:Name="ThemeToggleIcon" Text="&#xE793;"
+                               FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               Foreground="{DynamicResource ThemeText}"/>
+                </Button>
+
+                <TextBlock Grid.Column="4" x:Name="MasterPwdStatus"
+                           Text="Master password: not set" Foreground="{DynamicResource ThemeOverlay0}"
+                           FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+
+                <CheckBox Grid.Column="5" x:Name="PerItemCheckBox"
+                          Content="Per-item passwords" FontSize="12"
+                          Foreground="{DynamicResource ThemeText}"
+                          VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
+        <!-- Tabs -->
+        <TabControl Grid.Row="2" x:Name="PeerTabs" Margin="0,0,0,8"
+                    BorderBrush="{DynamicResource ThemeSurface1}" Background="{DynamicResource ThemeSurface0}"
+                    SelectionChanged="PeerTabs_SelectionChanged"/>
+
+        <!-- Status bar -->
+        <Border Grid.Row="3" Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}"
+                BorderThickness="1" CornerRadius="4" Padding="10,6">
+            <TextBlock x:Name="StatusText" Foreground="{DynamicResource ThemeOverlay0}" FontSize="12"/>
+        </Border>
+    </Grid>
+</Window>

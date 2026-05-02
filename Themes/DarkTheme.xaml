@@ -1,0 +1,21 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Catppuccin Mocha (Dark) -->
+    <SolidColorBrush x:Key="ThemeBase"          Color="#1E1E2E"/>
+    <SolidColorBrush x:Key="ThemeCrust"         Color="#11111B"/>
+    <SolidColorBrush x:Key="ThemeSurface0"      Color="#313244"/>
+    <SolidColorBrush x:Key="ThemeSurface1"      Color="#45475A"/>
+    <SolidColorBrush x:Key="ThemeSurface2"      Color="#585B70"/>
+    <SolidColorBrush x:Key="ThemeOverlay0"      Color="#6C7086"/>
+    <SolidColorBrush x:Key="ThemeText"          Color="#CDD6F4"/>
+    <SolidColorBrush x:Key="ThemeSubtext0"      Color="#A6ADC8"/>
+    <SolidColorBrush x:Key="ThemeBlue"          Color="#89B4FA"/>
+    <SolidColorBrush x:Key="ThemeGreen"         Color="#A6E3A1"/>
+    <SolidColorBrush x:Key="ThemeRed"           Color="#F38BA8"/>
+    <SolidColorBrush x:Key="ThemeYellow"        Color="#F9E2AF"/>
+    <SolidColorBrush x:Key="ThemeMauve"         Color="#CBA6F7"/>
+    <SolidColorBrush x:Key="ThemeTabHover"      Color="#3A3C50"/>
+    <SolidColorBrush x:Key="ThemeShareIconOn"   Color="#1E1E2E"/>
+    <SolidColorBrush x:Key="ThemeBadgeText"     Color="#1E1E2E"/>
+    <SolidColorBrush x:Key="ThemeCardHighlight" Color="#313244"/>
+</ResourceDictionary>
