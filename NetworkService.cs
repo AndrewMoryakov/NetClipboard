@@ -395,7 +395,15 @@ public class NetworkService : IDisposable
 
                 await stream.ReadExactlyAsync(chunkLenBuf, chunkCts.Token);
                 int chunkLen = BitConverter.ToInt32(chunkLenBuf);
-                if (chunkLen == 0) break;
+                if (chunkLen == 0)
+                {
+                    // EOF marker. Detect sender-side truncation
+                    // (e.g. source file shrunk mid-transfer).
+                    if (received != fileSize)
+                        throw new InvalidDataException(
+                            $"Short transfer: received {received}, declared {fileSize}");
+                    break;
+                }
                 if (chunkLen < 0 || chunkLen > 1_048_576)
                     throw new InvalidDataException($"Invalid chunk length {chunkLen}");
 

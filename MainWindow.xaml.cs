@@ -26,8 +26,20 @@ public partial class MainWindow : Window
     private string _lastClipText = "";
     private string _lastClipFile = "";
     private string? _masterPassword;
+    private DateTime _statusLockedUntil = DateTime.MinValue;
     private const int MaxLocalItems = 200;
     private const int MaxPeerItems = 200;
+    private const int StatusHoldSeconds = 4;
+
+    /// <summary>Set a user-facing status that survives the next 4s of background UpdateStatus() ticks.</summary>
+    private string StatusMsg
+    {
+        set
+        {
+            StatusMsg = value;
+            _statusLockedUntil = DateTime.Now.AddSeconds(StatusHoldSeconds);
+        }
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool AddClipboardFormatListener(IntPtr hwnd);
@@ -80,7 +92,7 @@ public partial class MainWindow : Window
         PeerTabs.Items.Add(new TabItem { Header = "My Clipboard", Content = localList });
         PeerTabs.SelectedIndex = 0;
 
-        StatusText.Text = "Monitoring clipboard. Discovering peers...";
+        StatusMsg = "Monitoring clipboard. Discovering peers...";
         Closing += OnClosing;
 
         // Online/offline check timer
@@ -185,7 +197,7 @@ public partial class MainWindow : Window
                     _localItems.RemoveAt(_localItems.Count - 1);
 
                 if (files.Count > 1)
-                    StatusText.Text = $"Captured {info.Name}. {files.Count - 1} other file(s) ignored (MVP: single file).";
+                    StatusMsg = $"Captured {info.Name}. {files.Count - 1} other file(s) ignored (MVP: single file).";
                 else
                     UpdateStatus();
                 return;
@@ -216,7 +228,7 @@ public partial class MainWindow : Window
             _masterPassword = dlg.Password;
             MasterPwdStatus.Text = "Master password: set";
             MasterPwdStatus.Foreground = Brush("ThemeGreen");
-            StatusText.Text = "Master password set";
+            StatusMsg = "Master password set";
         }
     }
 
@@ -289,7 +301,7 @@ public partial class MainWindow : Window
             && System.Net.IPAddress.TryParse(tb.Text.Trim(), out var ip))
         {
             _net.AddDirectPeer(ip);
-            StatusText.Text = $"Added direct peer {ip} — discovering...";
+            StatusMsg = $"Added direct peer {ip} — discovering...";
         }
     }
 
@@ -394,7 +406,7 @@ public partial class MainWindow : Window
         if (_peers.IsEmpty)
         {
             entry.IsShared = false;
-            StatusText.Text = "No peers discovered yet";
+            StatusMsg = "No peers discovered yet";
             return;
         }
 
@@ -402,7 +414,9 @@ public partial class MainWindow : Window
         if (entry is ClipboardFileEntry fileEntry)
         {
             entry.IsShared = true;
-            await SendFileToPeers(fileEntry);
+            toggle.IsEnabled = false;
+            try { await SendFileToPeers(fileEntry); }
+            finally { toggle.IsEnabled = true; }
             return;
         }
 
@@ -411,7 +425,7 @@ public partial class MainWindow : Window
         if (entry.IsEncrypted && entry.CipherText == null)
         {
             entry.IsShared = false;
-            StatusText.Text = "Encryption in progress — try Share again in a moment";
+            StatusMsg = "Encryption in progress — try Share again in a moment";
             return;
         }
 
@@ -422,7 +436,7 @@ public partial class MainWindow : Window
         var textToSend = entry.IsEncrypted ? entry.CipherText! : entry.Text;
         var encrypted = entry.IsEncrypted;
 
-        StatusText.Text = $"Sending to {_peers.Count} peer(s)...";
+        StatusMsg = $"Sending to {_peers.Count} peer(s)...";
 
         var sendTasks = _peers.Values.Select(async peer =>
         {
@@ -436,7 +450,7 @@ public partial class MainWindow : Window
         var results = await Task.WhenAll(sendTasks);
         int ok = results.Count(r => r);
 
-        StatusText.Text = ok > 0
+        StatusMsg = ok > 0
             ? $"Synced to {ok} peer(s)" + (encrypted ? " (encrypted)" : "")
             : "Sync failed — peers unreachable";
     }
@@ -460,7 +474,7 @@ public partial class MainWindow : Window
             {
                 entry.Text = auto;
                 entry.IsDecrypted = true;
-                StatusText.Text = "Decrypted with master password";
+                StatusMsg = "Decrypted with master password";
                 return;
             }
         }
@@ -475,11 +489,11 @@ public partial class MainWindow : Window
         {
             entry.Text = plaintext;
             entry.IsDecrypted = true;
-            StatusText.Text = "Decrypted successfully";
+            StatusMsg = "Decrypted successfully";
         }
         else
         {
-            StatusText.Text = "Wrong password";
+            StatusMsg = "Wrong password";
         }
     }
 
@@ -659,6 +673,9 @@ public partial class MainWindow : Window
 
     private void UpdateStatus()
     {
+        // Don't clobber a recent user-action status.
+        if (DateTime.Now < _statusLockedUntil) return;
+
         var online = _peers.Values.Count(p => p.IsOnline);
         var total = _peers.Count;
         StatusText.Text = total > 0
@@ -673,7 +690,7 @@ public partial class MainWindow : Window
         if (PeerTabs.SelectedIndex == 0)
         {
             _localItems.Clear();
-            StatusText.Text = "Local clipboard cleared";
+            StatusMsg = "Local clipboard cleared";
         }
         else if (PeerTabs.SelectedItem is TabItem tab && tab.Tag is string id
                  && _peers.TryGetValue(id, out var peer))
@@ -682,7 +699,7 @@ public partial class MainWindow : Window
             peer.UnreadCount = 0;
             if (_peerHeaderParts.TryGetValue(id, out var parts))
                 parts.badge.Visibility = Visibility.Collapsed;
-            StatusText.Text = $"Cleared items from {peer.Name}";
+            StatusMsg = $"Cleared items from {peer.Name}";
         }
     }
 
@@ -730,11 +747,11 @@ public partial class MainWindow : Window
         // Clipboard may be locked by another process (RDP, OneNote, AVs) — retry briefly.
         for (int i = 0; i < 5; i++)
         {
-            try { Clipboard.SetText(text); StatusText.Text = "Copied!"; return; }
+            try { Clipboard.SetText(text); StatusMsg = "Copied!"; return; }
             catch (System.Runtime.InteropServices.COMException) when (i < 4)
             { Thread.Sleep(10); }
         }
-        StatusText.Text = "Clipboard busy — try again";
+        StatusMsg = "Clipboard busy — try again";
     }
 
     private void PeerTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -772,17 +789,17 @@ public partial class MainWindow : Window
         if (_peers.IsEmpty)
         {
             fileEntry.IsShared = false;
-            StatusText.Text = "No peers discovered yet";
+            StatusMsg = "No peers discovered yet";
             return;
         }
         if (string.IsNullOrEmpty(fileEntry.LocalPath) || !File.Exists(fileEntry.LocalPath))
         {
             fileEntry.IsShared = false;
-            StatusText.Text = "Source file not found";
+            StatusMsg = "Source file not found";
             return;
         }
 
-        StatusText.Text = $"Sending {fileEntry.FileName} to {_peers.Count} peer(s)...";
+        StatusMsg = $"Sending {fileEntry.FileName} to {_peers.Count} peer(s)...";
 
         // Fresh transferId per Share — receiver gets a distinct entry each time,
         // no orphan/overwrite from re-Share of the same source.
@@ -799,7 +816,7 @@ public partial class MainWindow : Window
         }).ToList();
         var results = await Task.WhenAll(sendTasks);
         int ok = results.Count(r => r);
-        StatusText.Text = ok > 0
+        StatusMsg = ok > 0
             ? $"Sent {fileEntry.FileName} to {ok} peer(s)"
             : "File send failed — peers unreachable";
     }
@@ -888,7 +905,7 @@ public partial class MainWindow : Window
             if (_incomingFiles.TryGetValue(f.FileId, out var entry))
             {
                 entry.IsFailed = true;
-                StatusText.Text = $"Failed to receive {entry.FileName}: {f.Reason}";
+                StatusMsg = $"Failed to receive {entry.FileName}: {f.Reason}";
             }
         });
     }
@@ -900,18 +917,18 @@ public partial class MainWindow : Window
         if (sender is not Button btn || btn.DataContext is not ClipboardFileEntry fe) return;
         if (string.IsNullOrEmpty(fe.LocalPath) || !File.Exists(fe.LocalPath))
         {
-            StatusText.Text = "File no longer available";
+            StatusMsg = "File no longer available";
             return;
         }
 
         var paths = new System.Collections.Specialized.StringCollection { fe.LocalPath };
         for (int i = 0; i < 5; i++)
         {
-            try { Clipboard.SetFileDropList(paths); StatusText.Text = $"Copied {fe.FileName} to clipboard"; return; }
+            try { Clipboard.SetFileDropList(paths); StatusMsg = $"Copied {fe.FileName} to clipboard"; return; }
             catch (System.Runtime.InteropServices.COMException) when (i < 4)
             { Thread.Sleep(10); }
         }
-        StatusText.Text = "Clipboard busy — try again";
+        StatusMsg = "Clipboard busy — try again";
     }
 
     private async void SaveFileAs_Click(object sender, RoutedEventArgs e)
@@ -919,7 +936,7 @@ public partial class MainWindow : Window
         if (sender is not Button btn || btn.DataContext is not ClipboardFileEntry fe) return;
         if (string.IsNullOrEmpty(fe.LocalPath) || !File.Exists(fe.LocalPath))
         {
-            StatusText.Text = "File no longer available";
+            StatusMsg = "File no longer available";
             return;
         }
 
@@ -932,15 +949,15 @@ public partial class MainWindow : Window
 
         var source = fe.LocalPath;
         var target = dlg.FileName;
-        StatusText.Text = $"Saving {fe.FileName}...";
+        StatusMsg = $"Saving {fe.FileName}...";
         try
         {
             await Task.Run(() => File.Copy(source, target, overwrite: true));
-            StatusText.Text = $"Saved to {target}";
+            StatusMsg = $"Saved to {target}";
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Save failed: {ex.Message}";
+            StatusMsg = $"Save failed: {ex.Message}";
         }
     }
 }
