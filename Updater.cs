@@ -118,6 +118,8 @@ public static class Updater
         File.Move(currentExe, oldExe);
         File.Move(newExePath, currentExe);
         Process.Start(new ProcessStartInfo { FileName = currentExe, UseShellExecute = true });
+        // Mark as real exit so MainWindow.OnClosing doesn't trap us in the tray.
+        App.IsShuttingDown = true;
         Application.Current.Shutdown();
     }
 

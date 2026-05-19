@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<ClipboardFileEntry, CancellationTokenSource> _localSendCts = new();
     private const long LargeFileThresholdBytes = 300L * 1024 * 1024;
     private HwndSource? _hwndSource;
+    private TrayIcon? _tray;
     private string _lastClipText = "";
     private string _lastClipFile = "";
     private string? _masterPassword;
@@ -101,6 +102,9 @@ public partial class MainWindow : Window
         var onlineTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         onlineTimer.Tick += OnlineCheck_Tick;
         onlineTimer.Start();
+
+        // System tray icon — owns its own lifetime, disposed on real exit.
+        _tray = new TrayIcon(this);
 
         // Auto-update: clean up leftover .old from previous upgrade, then
         // fire a non-blocking check against GitHub Releases.
@@ -842,6 +846,15 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        // X / Alt+F4: minimize to tray instead of actually exiting.
+        // Real exit comes from tray menu, Updater, or OS session-ending.
+        if (!App.IsShuttingDown)
+        {
+            e.Cancel = true;
+            Hide();
+            return;
+        }
+
         ThemeManager.ThemeChanged -= OnThemeChanged;
         if (_hwndSource != null)
             RemoveClipboardFormatListener(_hwndSource.Handle);
@@ -853,6 +866,8 @@ public partial class MainWindow : Window
         foreach (var peer in _peers.Values)
             foreach (var entry in peer.Items.OfType<ClipboardFileEntry>().Where(f => f.IsIncoming))
                 CleanupTempFile(entry);
+
+        _tray?.Dispose();
     }
 
     // --- File transfer: sender ---
