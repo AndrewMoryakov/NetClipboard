@@ -92,6 +92,8 @@ public class ClipboardFileEntry : ClipboardEntry
     private long _bytesTransferred;
     private bool _isComplete;
     private bool _isFailed;
+    private bool _isSending;
+    private string _reason = "";
     private string? _localPath;
 
     public string FileId { get; init; } = "";
@@ -151,15 +153,47 @@ public class ClipboardFileEntry : ClipboardEntry
         }
     }
 
+    public bool IsSending
+    {
+        get => _isSending;
+        set
+        {
+            if (_isSending != value)
+            {
+                _isSending = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(ShowSendCancel));
+                OnPropertyChanged(nameof(ShowShareToggle));
+            }
+        }
+    }
+
+    public string Reason
+    {
+        get => _reason;
+        set
+        {
+            if (_reason != value)
+            {
+                _reason = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(ProgressText));
+            }
+        }
+    }
+
     public double ProgressPercent =>
         FileSize > 0 ? (double)BytesTransferred / FileSize * 100 : 0;
     public string ProgressText =>
+        IsFailed && !string.IsNullOrEmpty(Reason) ? Reason :
         IsFailed   ? "Failed" :
         IsComplete ? SizeText :
                      $"{FormatBytes(BytesTransferred)} / {FormatBytes(FileSize)}";
     public string SizeText => FormatBytes(FileSize);
     public bool ShowProgress => IsIncoming && !IsComplete && !IsFailed;
     public bool ShowActions => IsIncoming && IsComplete;
+    public bool ShowSendCancel => !IsIncoming && IsSending;
+    public bool ShowShareToggle => !IsIncoming && !IsSending;
 
     public static string FormatBytes(long n)
     {

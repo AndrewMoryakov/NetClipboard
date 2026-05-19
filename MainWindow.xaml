@@ -309,11 +309,12 @@
                                    HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
 
-                    <!-- Share toggle -->
+                    <!-- Share toggle (when not sending) -->
                     <ToggleButton Grid.Column="1" IsChecked="{Binding IsShared}"
                                   Click="ShareToggle_Click"
                                   VerticalAlignment="Top" Margin="0,0,8,0"
-                                  ToolTip="Sync to peers">
+                                  ToolTip="Sync to peers"
+                                  Visibility="{Binding ShowShareToggle, Converter={StaticResource BoolToVis}}">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton">
                                 <Setter Property="Template">
@@ -347,6 +348,21 @@
                             </Style>
                         </ToggleButton.Style>
                     </ToggleButton>
+
+                    <!-- Cancel button (while sending) -->
+                    <Button Grid.Column="1" Click="CancelFile_Click"
+                            VerticalAlignment="Top" Margin="0,0,8,0"
+                            ToolTip="Cancel send"
+                            Width="36" Height="36" Padding="0"
+                            Background="{DynamicResource ThemeSurface0}"
+                            BorderBrush="{DynamicResource ThemeRed}"
+                            BorderThickness="1"
+                            Cursor="Hand"
+                            Visibility="{Binding ShowSendCancel, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets"
+                                   FontSize="15" Foreground="{DynamicResource ThemeRed}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Button>
 
                     <!-- Name + size -->
                     <StackPanel Grid.Column="2" VerticalAlignment="Center">
@@ -418,9 +434,21 @@
                                    FontWeight="Normal"/>
                     </StackPanel>
 
-                    <!-- Actions (Copy/Save when complete) + Delete (always) -->
+                    <!-- Actions: Cancel during transfer, Copy/Save when complete, Delete always -->
                     <StackPanel Grid.Column="2" Grid.Row="0" Orientation="Horizontal"
                                 VerticalAlignment="Top">
+                        <Button Style="{StaticResource DarkBtn}" Padding="8,4"
+                                Click="CancelFile_Click" ToolTip="Cancel receive"
+                                Margin="0,0,4,0"
+                                Visibility="{Binding ShowProgress, Converter={StaticResource BoolToVis}}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE711;" FontFamily="Segoe MDL2 Assets"
+                                           FontSize="12" Foreground="{DynamicResource ThemeRed}"
+                                           VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBlock Text="Cancel" Foreground="{DynamicResource ThemeText}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
                         <Button Style="{StaticResource DarkBtn}" Padding="8,4"
                                 Click="CopyFile_Click" ToolTip="Copy file to clipboard"
                                 Margin="0,0,4,0"

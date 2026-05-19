@@ -36,6 +36,8 @@ public class NetworkService : IDisposable
     private readonly HashSet<string> _localIps = new();
     private readonly Dictionary<string, DateTime> _directPeers = new();
     private readonly object _directPeersLock = new();
+    private readonly Dictionary<string, CancellationTokenSource> _activeReceives = new();
+    private readonly object _activeReceivesLock = new();
     private byte[]? _broadcastPayload;
     private List<IPAddress>? _cachedBroadcastAddrs;
     private DateTime _broadcastAddrsCachedAt;
@@ -78,6 +80,17 @@ public class NetworkService : IDisposable
     public List<string> GetDirectPeers()
     {
         lock (_directPeersLock) { return _directPeers.Keys.ToList(); }
+    }
+
+    public void CancelIncomingFile(string fileId)
+    {
+        lock (_activeReceivesLock)
+        {
+            if (_activeReceives.TryGetValue(fileId, out var cts))
+            {
+                try { cts.Cancel(); } catch { }
+            }
+        }
     }
 
     private static string LoadOrCreateInstanceId()
@@ -379,6 +392,9 @@ public class NetworkService : IDisposable
         Directory.CreateDirectory(dir);
         var tempPath = Path.Combine(dir, safeName);
 
+        using var fileCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+        lock (_activeReceivesLock) { _activeReceives[fileId] = fileCts; }
+
         FileStarted?.Invoke(new IncomingFileStart(
             senderId, senderName, remoteIp, senderPort, fileId, fileName, fileSize));
 
@@ -390,15 +406,13 @@ public class NetworkService : IDisposable
             var chunkLenBuf = new byte[4];
             while (true)
             {
-                using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(fileCts.Token);
                 chunkCts.CancelAfter(TimeSpan.FromSeconds(30));
 
                 await stream.ReadExactlyAsync(chunkLenBuf, chunkCts.Token);
                 int chunkLen = BitConverter.ToInt32(chunkLenBuf);
                 if (chunkLen == 0)
                 {
-                    // EOF marker. Detect sender-side truncation
-                    // (e.g. source file shrunk mid-transfer).
                     if (received != fileSize)
                         throw new InvalidDataException(
                             $"Short transfer: received {received}, declared {fileSize}");
@@ -412,7 +426,7 @@ public class NetworkService : IDisposable
                 received += chunkLen;
                 if (received > fileSize)
                     throw new InvalidDataException("Received bytes exceed declared size");
-                await fs.WriteAsync(chunk.AsMemory(0, chunkLen), _cts.Token);
+                await fs.WriteAsync(chunk.AsMemory(0, chunkLen), fileCts.Token);
 
                 var now = DateTime.UtcNow;
                 if ((now - lastProgressReport).TotalMilliseconds > 200)
@@ -421,15 +435,27 @@ public class NetworkService : IDisposable
                     lastProgressReport = now;
                 }
             }
-            await fs.FlushAsync(_cts.Token);
+            await fs.FlushAsync(fileCts.Token);
             FileProgress?.Invoke(new IncomingFileProgress(fileId, received));
             FileCompleted?.Invoke(new IncomingFileCompleted(fileId, tempPath));
+        }
+        catch (OperationCanceledException)
+        {
+            try { File.Delete(tempPath); } catch { }
+            try { Directory.Delete(dir, true); } catch { }
+            // Distinguish user-cancel from per-chunk timeout.
+            var reason = fileCts.IsCancellationRequested ? "Cancelled" : "Timeout";
+            FileFailed?.Invoke(new IncomingFileFailed(fileId, reason));
         }
         catch (Exception ex)
         {
             try { File.Delete(tempPath); } catch { }
             try { Directory.Delete(dir, true); } catch { }
             FileFailed?.Invoke(new IncomingFileFailed(fileId, ex.GetType().Name));
+        }
+        finally
+        {
+            lock (_activeReceivesLock) { _activeReceives.Remove(fileId); }
         }
     }
 

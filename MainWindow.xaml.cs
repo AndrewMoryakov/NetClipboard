@@ -22,6 +22,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, (Ellipse dot, TextBlock badge, TextBlock name)> _peerHeaderParts = new();
     private readonly ObservableCollection<ClipboardEntry> _localItems = new();
     private readonly Dictionary<string, ClipboardFileEntry> _incomingFiles = new();
+    private readonly Dictionary<ClipboardFileEntry, CancellationTokenSource> _localSendCts = new();
+    private const long LargeFileThresholdBytes = 300L * 1024 * 1024;
     private HwndSource? _hwndSource;
     private string _lastClipText = "";
     private string _lastClipFile = "";
@@ -801,24 +803,55 @@ public partial class MainWindow : Window
 
         StatusMsg = $"Sending {fileEntry.FileName} to {_peers.Count} peer(s)...";
 
-        // Fresh transferId per Share — receiver gets a distinct entry each time,
-        // no orphan/overwrite from re-Share of the same source.
         var path = fileEntry.LocalPath!;
         var transferId = Guid.NewGuid().ToString("N")[..12];
-        var sendTasks = _peers.Values.Select(async peer =>
+        var cts = new CancellationTokenSource();
+        _localSendCts[fileEntry] = cts;
+        fileEntry.IsSending = true;
+
+        try
         {
-            try
+            var token = cts.Token;
+            var sendTasks = _peers.Values.Select(async peer =>
             {
-                await _net.SendFileAsync(peer.Address, peer.Port, path, transferId);
-                return true;
-            }
-            catch { return false; }
-        }).ToList();
-        var results = await Task.WhenAll(sendTasks);
-        int ok = results.Count(r => r);
-        StatusMsg = ok > 0
-            ? $"Sent {fileEntry.FileName} to {ok} peer(s)"
-            : "File send failed — peers unreachable";
+                try
+                {
+                    await _net.SendFileAsync(peer.Address, peer.Port, path, transferId, ct: token);
+                    return true;
+                }
+                catch { return false; }
+            }).ToList();
+            var results = await Task.WhenAll(sendTasks);
+            int ok = results.Count(r => r);
+
+            StatusMsg = cts.IsCancellationRequested
+                ? $"Cancelled sending {fileEntry.FileName}"
+                : ok > 0
+                    ? $"Sent {fileEntry.FileName} to {ok} peer(s)"
+                    : "File send failed — peers unreachable";
+        }
+        finally
+        {
+            _localSendCts.Remove(fileEntry);
+            fileEntry.IsSending = false;
+            cts.Dispose();
+        }
+    }
+
+    private void CancelFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.DataContext is not ClipboardFileEntry fe) return;
+
+        if (fe.IsIncoming)
+        {
+            _net.CancelIncomingFile(fe.FileId);
+            StatusMsg = $"Cancelling {fe.FileName}...";
+        }
+        else if (_localSendCts.TryGetValue(fe, out var cts))
+        {
+            try { cts.Cancel(); } catch { }
+            StatusMsg = $"Cancelling {fe.FileName}...";
+        }
     }
 
     // --- File transfer: receiver events ---
@@ -873,6 +906,22 @@ public partial class MainWindow : Window
                     parts.badge.Visibility = Visibility.Visible;
                 }
             }
+
+            // Large-file confirmation prompt (file is already being received in the
+            // background — the dialog is just an opt-out, not a blocking accept).
+            if (f.FileSize > LargeFileThresholdBytes)
+            {
+                var sizeText = ClipboardFileEntry.FormatBytes(f.FileSize);
+                var answer = MessageBox.Show(this,
+                    $"{f.SenderName} is sending '{f.FileName}' ({sizeText}).\n\n" +
+                    "It is already being received in the background.\n" +
+                    "Keep receiving this large file?",
+                    "Large file incoming",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (answer != MessageBoxResult.Yes)
+                    _net.CancelIncomingFile(f.FileId);
+            }
         });
     }
 
@@ -902,11 +951,12 @@ public partial class MainWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
-            if (_incomingFiles.TryGetValue(f.FileId, out var entry))
-            {
-                entry.IsFailed = true;
-                StatusMsg = $"Failed to receive {entry.FileName}: {f.Reason}";
-            }
+            if (!_incomingFiles.TryGetValue(f.FileId, out var entry)) return;
+            entry.Reason = f.Reason;
+            entry.IsFailed = true;
+            StatusMsg = f.Reason == "Cancelled"
+                ? $"Cancelled {entry.FileName}"
+                : $"Failed to receive {entry.FileName}: {f.Reason}";
         });
     }
 
