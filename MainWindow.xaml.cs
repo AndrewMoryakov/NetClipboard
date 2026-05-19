@@ -24,6 +24,7 @@ public partial class MainWindow : Window
     private string _lastClipText = "";
     private string? _masterPassword;
     private const int MaxLocalItems = 200;
+    private const int MaxPeerItems = 200;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool AddClipboardFormatListener(IntPtr hwnd);
@@ -183,7 +184,7 @@ public partial class MainWindow : Window
         var dlg = new Window
         {
             Title = "Add Peer",
-            Width = 320, Height = 140,
+            Width = 320, Height = 280,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Owner = this,
             ResizeMode = ResizeMode.NoResize,
@@ -211,6 +212,33 @@ public partial class MainWindow : Window
         };
         btn.Click += (_, _) => dlg.DialogResult = true;
         sp.Children.Add(btn);
+
+        // Direct peers management
+        var peers = _net.GetDirectPeers();
+        sp.Children.Add(new Separator
+        {
+            Margin = new Thickness(0, 10, 0, 6),
+            Background = Brush("ThemeSurface2")
+        });
+        var countLabel = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = Brush("ThemeOverlay0"),
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+        UpdatePeerCountLabel(countLabel, peers.Count);
+        sp.Children.Add(countLabel);
+
+        var listPanel = new StackPanel();
+        foreach (var peerIp in peers)
+            listPanel.Children.Add(BuildPeerRow(peerIp, listPanel, countLabel));
+        sp.Children.Add(new ScrollViewer
+        {
+            Content = listPanel,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            MaxHeight = 110
+        });
+
         dlg.Content = sp;
         tb.Focus();
 
@@ -222,56 +250,93 @@ public partial class MainWindow : Window
         }
     }
 
+    private static void UpdatePeerCountLabel(TextBlock label, int count) =>
+        label.Text = count > 0 ? $"Active direct peers ({count}):" : "No direct peers";
+
+    private FrameworkElement BuildPeerRow(string ip, StackPanel list, TextBlock countLabel)
+    {
+        var row = new DockPanel { Margin = new Thickness(0, 1, 0, 1) };
+        var removeBtn = new Button
+        {
+            Content = "", // Segoe MDL2 Cancel
+            FontFamily = new FontFamily("Segoe MDL2 Assets"),
+            FontSize = 11,
+            Width = 22, Height = 22,
+            Padding = new Thickness(0),
+            Background = Brush("ThemeSurface0"),
+            Foreground = Brush("ThemeText"),
+            BorderBrush = Brush("ThemeSurface2"),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            ToolTip = $"Stop unicasting to {ip}"
+        };
+        DockPanel.SetDock(removeBtn, Dock.Right);
+        removeBtn.Click += (_, _) =>
+        {
+            if (System.Net.IPAddress.TryParse(ip, out var addr))
+                _net.RemoveDirectPeer(addr);
+            list.Children.Remove(row);
+            UpdatePeerCountLabel(countLabel, list.Children.Count);
+        };
+        row.Children.Add(removeBtn);
+        row.Children.Add(new TextBlock
+        {
+            Text = ip,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Brush("ThemeText"),
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 6, 0)
+        });
+        return row;
+    }
+
     // --- Lock toggle (encrypt before sharing) ---
 
-    private void LockToggle_Click(object sender, RoutedEventArgs e)
+    private async void LockToggle_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not ToggleButton toggle
             || toggle.DataContext is not ClipboardEntry entry)
             return;
 
-        if (entry.IsEncrypted)
+        // Block re-entry: prevents double-click producing an inconsistent
+        // (IsEncrypted, CipherText) state while async encrypt is in flight.
+        toggle.IsEnabled = false;
+        try
         {
-            // Toggling ON — encrypt
-            if (PerItemCheckBox.IsChecked == true)
+            if (entry.IsEncrypted)
             {
-                // Per-item mode: always prompt
-                var dlg = new PasswordDialog { Owner = this, Prompt = "Enter encryption password" };
-                if (dlg.ShowDialog() == true)
+                // Toggling ON — encrypt
+                string? password;
+                if (PerItemCheckBox.IsChecked == true || _masterPassword == null)
                 {
-                    entry.CipherText = CryptoHelper.Encrypt(entry.Text, dlg.Password);
+                    var prompt = "Enter encryption password";
+                    var dlg = new PasswordDialog { Owner = this, Prompt = prompt };
+                    if (dlg.ShowDialog() != true)
+                    {
+                        entry.IsEncrypted = false;
+                        return;
+                    }
+                    password = dlg.Password;
                 }
                 else
                 {
-                    entry.IsEncrypted = false;
-                    return;
+                    password = _masterPassword;
                 }
-            }
-            else if (_masterPassword != null)
-            {
-                // Use master password silently
-                entry.CipherText = CryptoHelper.Encrypt(entry.Text, _masterPassword);
+
+                var plaintext = entry.Text;
+                entry.CipherText = await Task.Run(() => CryptoHelper.Encrypt(plaintext, password));
+                // We hold the plaintext locally — keep it visible.
+                entry.IsDecrypted = true;
             }
             else
             {
-                // No master password — fallback to prompt
-                var dlg = new PasswordDialog { Owner = this, Prompt = "Enter encryption password" };
-                if (dlg.ShowDialog() == true)
-                {
-                    entry.CipherText = CryptoHelper.Encrypt(entry.Text, dlg.Password);
-                }
-                else
-                {
-                    entry.IsEncrypted = false;
-                    return;
-                }
+                // Toggling OFF — clear encryption, restore visibility
+                entry.CipherText = null;
+                entry.IsDecrypted = false;
             }
         }
-        else
+        finally
         {
-            // Toggling OFF — clear encryption, restore visibility
-            entry.CipherText = null;
-            entry.IsDecrypted = false;
+            toggle.IsEnabled = true;
         }
     }
 
@@ -283,9 +348,6 @@ public partial class MainWindow : Window
             || toggle.DataContext is not ClipboardEntry entry)
             return;
 
-        // Only act when toggled ON
-        if (!entry.IsShared) return;
-
         if (_peers.IsEmpty)
         {
             entry.IsShared = false;
@@ -293,19 +355,35 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Race guard: user can click Share while LockToggle_Click is awaiting
+        // CryptoHelper.Encrypt. In that window IsEncrypted=true but CipherText=null.
+        if (entry.IsEncrypted && entry.CipherText == null)
+        {
+            entry.IsShared = false;
+            StatusText.Text = "Encryption in progress — try Share again in a moment";
+            return;
+        }
+
+        // Every click resends. Force the visual "shared" state on, regardless of
+        // the ToggleButton's internal toggle (suppresses off→on blink).
+        entry.IsShared = true;
+
         var textToSend = entry.IsEncrypted ? entry.CipherText! : entry.Text;
         var encrypted = entry.IsEncrypted;
 
-        int ok = 0;
-        foreach (var peer in _peers.Values.ToList())
+        StatusText.Text = $"Sending to {_peers.Count} peer(s)...";
+
+        var sendTasks = _peers.Values.Select(async peer =>
         {
             try
             {
                 await _net.SendTextAsync(peer.Address, peer.Port, textToSend, encrypted);
-                ok++;
+                return true;
             }
-            catch { }
-        }
+            catch { return false; }
+        }).ToList();
+        var results = await Task.WhenAll(sendTasks);
+        int ok = results.Count(r => r);
 
         StatusText.Text = ok > 0
             ? $"Synced to {ok} peer(s)" + (encrypted ? " (encrypted)" : "")
@@ -314,16 +392,19 @@ public partial class MainWindow : Window
 
     // --- Unlock button (decrypt received item) ---
 
-    private void UnlockButton_Click(object sender, RoutedEventArgs e)
+    private async void UnlockButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button btn
             || btn.DataContext is not ClipboardEntry entry)
             return;
 
+        var cipher = entry.CipherText!;
+
         // Try master password first
         if (_masterPassword != null)
         {
-            var auto = CryptoHelper.Decrypt(entry.CipherText!, _masterPassword);
+            var pwd = _masterPassword;
+            var auto = await Task.Run(() => CryptoHelper.Decrypt(cipher, pwd));
             if (auto != null)
             {
                 entry.Text = auto;
@@ -337,7 +418,8 @@ public partial class MainWindow : Window
         var dlg = new PasswordDialog { Owner = this, Prompt = "Enter decryption password" };
         if (dlg.ShowDialog() != true) return;
 
-        var plaintext = CryptoHelper.Decrypt(entry.CipherText!, dlg.Password);
+        var manualPwd = dlg.Password;
+        var plaintext = await Task.Run(() => CryptoHelper.Decrypt(cipher, manualPwd));
         if (plaintext != null)
         {
             entry.Text = plaintext;
@@ -358,9 +440,13 @@ public partial class MainWindow : Window
         {
             if (_peers.TryGetValue(p.Id, out var existing))
             {
+                var displayChanged = existing.Name != p.Name || !existing.Address.Equals(p.Address);
+                existing.Name = p.Name;
                 existing.Address = p.Address;
                 existing.Port = p.Port;
                 existing.LastSeen = DateTime.Now;
+                if (displayChanged && _peerHeaderParts.TryGetValue(p.Id, out var hp))
+                    hp.name.Text = existing.DisplayName;
             }
             else
             {
@@ -381,11 +467,11 @@ public partial class MainWindow : Window
 
     private void OnMessageReceived(IncomingMessage msg)
     {
-        Dispatcher.BeginInvoke(() =>
+        _ = Dispatcher.InvokeAsync(async () =>
         {
             if (!_peers.ContainsKey(msg.SenderId))
             {
-                var peer = new PeerInfo
+                var newPeer = new PeerInfo
                 {
                     InstanceId = msg.SenderId,
                     Name = msg.SenderName,
@@ -393,9 +479,18 @@ public partial class MainWindow : Window
                     Port = msg.SenderPort,
                     LastSeen = DateTime.Now
                 };
-                _peers[msg.SenderId] = peer;
-                AddPeerTab(peer);
+                _peers[msg.SenderId] = newPeer;
+                AddPeerTab(newPeer);
                 UpdateStatus();
+            }
+
+            var peer = _peers[msg.SenderId];
+            peer.LastSeen = DateTime.Now;
+            if (!peer.IsOnline)
+            {
+                peer.IsOnline = true;
+                if (_peerHeaderParts.TryGetValue(msg.SenderId, out var dotParts))
+                    dotParts.dot.Fill = Brush("ThemeGreen");
             }
 
             var entry = new ClipboardEntry
@@ -406,29 +501,33 @@ public partial class MainWindow : Window
                 CipherText = msg.Encrypted ? msg.Text : null
             };
 
-            // Auto-decrypt with master password if available
-            if (msg.Encrypted && _masterPassword != null)
-            {
-                var plaintext = CryptoHelper.Decrypt(msg.Text, _masterPassword);
-                if (plaintext != null)
-                {
-                    entry.Text = plaintext;
-                    entry.IsDecrypted = true;
-                }
-            }
-
-            _peers[msg.SenderId].Items.Insert(0, entry);
+            // Show immediately (encrypted entries blurred); decrypt is async below.
+            peer.Items.Insert(0, entry);
+            while (peer.Items.Count > MaxPeerItems)
+                peer.Items.RemoveAt(peer.Items.Count - 1);
 
             // Update unread badge if tab not selected
             if (_peerTabs.TryGetValue(msg.SenderId, out var tab)
                 && PeerTabs.SelectedItem != tab)
             {
-                var peer = _peers[msg.SenderId];
                 peer.UnreadCount++;
                 if (_peerHeaderParts.TryGetValue(msg.SenderId, out var parts))
                 {
                     parts.badge.Text = peer.UnreadCount.ToString();
                     parts.badge.Visibility = Visibility.Visible;
+                }
+            }
+
+            // Auto-decrypt with master password if available — off UI thread
+            if (msg.Encrypted && _masterPassword != null)
+            {
+                var pwd = _masterPassword;
+                var cipher = msg.Text;
+                var plaintext = await Task.Run(() => CryptoHelper.Decrypt(cipher, pwd));
+                if (plaintext != null)
+                {
+                    entry.Text = plaintext;
+                    entry.IsDecrypted = true;
                 }
             }
         });
@@ -550,12 +649,17 @@ public partial class MainWindow : Window
 
     private void CopyItem_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button btn && btn.Tag is string text)
+        if (sender is not Button btn || btn.Tag is not string text) return;
+
+        _lastClipText = text;
+        // Clipboard may be locked by another process (RDP, OneNote, AVs) — retry briefly.
+        for (int i = 0; i < 5; i++)
         {
-            _lastClipText = text;
-            Clipboard.SetText(text);
-            StatusText.Text = "Copied!";
+            try { Clipboard.SetText(text); StatusText.Text = "Copied!"; return; }
+            catch (System.Runtime.InteropServices.COMException) when (i < 4)
+            { Thread.Sleep(10); }
         }
+        StatusText.Text = "Clipboard busy — try again";
     }
 
     private void PeerTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -16,13 +17,14 @@ public class NetworkService : IDisposable
 {
     public const int DiscoveryPort = 9850;
     private const int DefaultTcpPort = 9851;
+    private const int DirectPeerTtlSeconds = 120;
 
-    private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
+    private readonly string _instanceId = LoadOrCreateInstanceId();
     private UdpClient? _udpListener;
     private TcpListener? _tcpListener;
     private readonly CancellationTokenSource _cts = new();
     private readonly HashSet<string> _localIps = new();
-    private readonly HashSet<string> _directPeers = new();
+    private readonly Dictionary<string, DateTime> _directPeers = new();
     private readonly object _directPeersLock = new();
     private byte[]? _broadcastPayload;
     private List<IPAddress>? _cachedBroadcastAddrs;
@@ -50,8 +52,47 @@ public class NetworkService : IDisposable
     {
         var ip = address.ToString();
         if (_localIps.Contains(ip)) return;
-        lock (_directPeersLock) { _directPeers.Add(ip); }
+        lock (_directPeersLock) { _directPeers[ip] = DateTime.UtcNow; }
     }
+
+    public void RemoveDirectPeer(IPAddress address)
+    {
+        var ip = address.ToString();
+        lock (_directPeersLock) { _directPeers.Remove(ip); }
+    }
+
+    public List<string> GetDirectPeers()
+    {
+        lock (_directPeersLock) { return _directPeers.Keys.ToList(); }
+    }
+
+    private static string LoadOrCreateInstanceId()
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "NetClipboard");
+            var path = Path.Combine(dir, "instance.id");
+            if (File.Exists(path))
+            {
+                var existing = File.ReadAllText(path).Trim();
+                if (existing.Length == 8 && existing.All(IsHexLower))
+                    return existing;
+            }
+            Directory.CreateDirectory(dir);
+            var id = Guid.NewGuid().ToString("N")[..8];
+            File.WriteAllText(path, id);
+            return id;
+        }
+        catch
+        {
+            return Guid.NewGuid().ToString("N")[..8];
+        }
+    }
+
+    private static bool IsHexLower(char c) =>
+        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
 
     private void DetectLocalIp()
     {
@@ -182,9 +223,18 @@ public class NetworkService : IDisposable
                     catch { }
                 }
 
-                // Unicast to direct peers (for VPN/WireGuard networks)
+                // Evict stale direct peers (typo'd IPs, peers that went silent)
                 List<string> peers;
-                lock (_directPeersLock) { peers = _directPeers.ToList(); }
+                lock (_directPeersLock)
+                {
+                    var cutoff = DateTime.UtcNow.AddSeconds(-DirectPeerTtlSeconds);
+                    foreach (var k in _directPeers.Where(kv => kv.Value < cutoff)
+                                                   .Select(kv => kv.Key).ToList())
+                        _directPeers.Remove(k);
+                    peers = _directPeers.Keys.ToList();
+                }
+
+                // Unicast to direct peers (for VPN/WireGuard networks)
                 foreach (var peerIp in peers)
                 {
                     try
@@ -217,8 +267,8 @@ public class NetworkService : IDisposable
                 var senderIp = r.RemoteEndPoint.Address.ToString();
                 if (_localIps.Contains(senderIp)) continue;
 
-                // Auto-add sender to direct peers for bidirectional unicast
-                lock (_directPeersLock) { _directPeers.Add(senderIp); }
+                // Auto-add sender to direct peers for bidirectional unicast; refresh TTL
+                lock (_directPeersLock) { _directPeers[senderIp] = DateTime.UtcNow; }
 
                 PeerSeen?.Invoke(new PeerAnnounce(
                     id,
@@ -251,16 +301,18 @@ public class NetworkService : IDisposable
         {
             using (tcp)
             {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                cts.CancelAfter(TimeSpan.FromSeconds(10));
+
                 var stream = tcp.GetStream();
-                stream.ReadTimeout = 10_000;
 
                 var lenBuf = new byte[4];
-                await stream.ReadExactlyAsync(lenBuf);
+                await stream.ReadExactlyAsync(lenBuf, cts.Token);
                 int len = BitConverter.ToInt32(lenBuf);
                 if (len is <= 0 or > 10_000_000) return;
 
                 var buf = new byte[len];
-                await stream.ReadExactlyAsync(buf);
+                await stream.ReadExactlyAsync(buf, cts.Token);
 
                 var json = Encoding.UTF8.GetString(buf);
                 using var doc = JsonDocument.Parse(json);
@@ -282,7 +334,7 @@ public class NetworkService : IDisposable
         catch { }
     }
 
-    public async Task SendTextAsync(IPAddress address, int port, string text, bool encrypted = false)
+    public async Task SendTextAsync(IPAddress address, int port, string text, bool encrypted = false, CancellationToken ct = default)
     {
         var obj = new
         {
@@ -295,13 +347,15 @@ public class NetworkService : IDisposable
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(obj));
         var lenBytes = BitConverter.GetBytes(bytes.Length);
 
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(3));
+
         using var tcp = new TcpClient();
-        tcp.SendTimeout = 5000;
-        await tcp.ConnectAsync(address, port);
+        await tcp.ConnectAsync(address, port, cts.Token);
         var stream = tcp.GetStream();
-        await stream.WriteAsync(lenBytes);
-        await stream.WriteAsync(bytes);
-        await stream.FlushAsync();
+        await stream.WriteAsync(lenBytes, cts.Token);
+        await stream.WriteAsync(bytes, cts.Token);
+        await stream.FlushAsync(cts.Token);
     }
 
     public void Dispose()

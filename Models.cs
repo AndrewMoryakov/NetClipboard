@@ -89,7 +89,6 @@ public class ClipboardEntry : INotifyPropertyChanged
 
 public class PeerInfo : INotifyPropertyChanged
 {
-    private int _unreadCount;
     private bool _isOnline = true;
 
     public string InstanceId { get; init; } = "";
@@ -100,11 +99,7 @@ public class PeerInfo : INotifyPropertyChanged
     public ObservableCollection<ClipboardEntry> Items { get; } = new();
     public string DisplayName => $"{Name} ({Address})";
 
-    public int UnreadCount
-    {
-        get => _unreadCount;
-        set { if (_unreadCount != value) { _unreadCount = value; OnPropertyChanged(); } }
-    }
+    public int UnreadCount { get; set; }
 
     public bool IsOnline
     {
