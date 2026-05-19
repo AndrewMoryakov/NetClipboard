@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
@@ -20,8 +21,10 @@ public partial class MainWindow : Window
     private readonly Dictionary<string, TabItem> _peerTabs = new();
     private readonly Dictionary<string, (Ellipse dot, TextBlock badge, TextBlock name)> _peerHeaderParts = new();
     private readonly ObservableCollection<ClipboardEntry> _localItems = new();
+    private readonly Dictionary<string, ClipboardFileEntry> _incomingFiles = new();
     private HwndSource? _hwndSource;
     private string _lastClipText = "";
+    private string _lastClipFile = "";
     private string? _masterPassword;
     private const int MaxLocalItems = 200;
     private const int MaxPeerItems = 200;
@@ -42,6 +45,10 @@ public partial class MainWindow : Window
 
         _net.PeerSeen += OnPeerSeen;
         _net.MessageReceived += OnMessageReceived;
+        _net.FileStarted += OnFileStarted;
+        _net.FileProgress += OnFileProgress;
+        _net.FileCompleted += OnFileCompleted;
+        _net.FileFailed += OnFileFailed;
 
         try
         {
@@ -60,7 +67,11 @@ public partial class MainWindow : Window
         var localList = new ListBox
         {
             ItemsSource = _localItems,
-            ItemTemplate = (DataTemplate)FindResource("LocalEntryTemplate"),
+            ItemTemplateSelector = new EntryTemplateSelector
+            {
+                TextTemplate = (DataTemplate)FindResource("LocalEntryTemplate"),
+                FileTemplate = (DataTemplate)FindResource("LocalFileEntryTemplate")
+            },
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent
@@ -149,10 +160,42 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (Clipboard.ContainsFileDropList())
+            {
+                var files = Clipboard.GetFileDropList();
+                if (files.Count == 0) return;
+                var path = files[0]; // MVP: single file
+                if (string.IsNullOrEmpty(path) || path == _lastClipFile) return;
+                var info = new FileInfo(path);
+                if (!info.Exists) return;
+                if ((info.Attributes & FileAttributes.Directory) != 0) return;
+                _lastClipFile = path;
+                _lastClipText = "";
+
+                _localItems.Insert(0, new ClipboardFileEntry
+                {
+                    FileId = Guid.NewGuid().ToString("N")[..12],
+                    LocalPath = path,
+                    FileName = info.Name,
+                    FileSize = info.Length,
+                    IsIncoming = false,
+                    IsComplete = true
+                });
+                if (_localItems.Count > MaxLocalItems)
+                    _localItems.RemoveAt(_localItems.Count - 1);
+
+                if (files.Count > 1)
+                    StatusText.Text = $"Captured {info.Name}. {files.Count - 1} other file(s) ignored (MVP: single file).";
+                else
+                    UpdateStatus();
+                return;
+            }
+
             if (!Clipboard.ContainsText()) return;
             var text = Clipboard.GetText();
             if (string.IsNullOrWhiteSpace(text) || text == _lastClipText) return;
             _lastClipText = text;
+            _lastClipFile = "";
 
             _localItems.Insert(0, new ClipboardEntry { Text = text });
             if (_localItems.Count > MaxLocalItems)
@@ -355,6 +398,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        // File entries: dispatch to dedicated path
+        if (entry is ClipboardFileEntry fileEntry)
+        {
+            entry.IsShared = true;
+            await SendFileToPeers(fileEntry);
+            return;
+        }
+
         // Race guard: user can click Share while LockToggle_Click is awaiting
         // CryptoHelper.Encrypt. In that window IsEncrypted=true but CipherText=null.
         if (entry.IsEncrypted && entry.CipherText == null)
@@ -540,7 +591,11 @@ public partial class MainWindow : Window
         var listBox = new ListBox
         {
             ItemsSource = peer.Items,
-            ItemTemplate = (DataTemplate)FindResource("RemoteEntryTemplate"),
+            ItemTemplateSelector = new EntryTemplateSelector
+            {
+                TextTemplate = (DataTemplate)FindResource("RemoteEntryTemplate"),
+                FileTemplate = (DataTemplate)FindResource("RemoteFileEntryTemplate")
+            },
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             BorderThickness = new Thickness(0),
             Background = Brushes.Transparent
@@ -645,6 +700,26 @@ public partial class MainWindow : Window
         {
             peer.Items.Remove(entry);
         }
+
+        // Clean up received-file temp data
+        if (entry is ClipboardFileEntry fe && fe.IsIncoming)
+        {
+            _incomingFiles.Remove(fe.FileId);
+            CleanupTempFile(fe);
+        }
+    }
+
+    private static void CleanupTempFile(ClipboardFileEntry fe)
+    {
+        if (string.IsNullOrEmpty(fe.FileId)) return;
+        try
+        {
+            var dir = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(), "NetClipboard", fe.FileId);
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+        catch { }
     }
 
     private void CopyItem_Click(object sender, RoutedEventArgs e)
@@ -681,5 +756,191 @@ public partial class MainWindow : Window
         if (_hwndSource != null)
             RemoveClipboardFormatListener(_hwndSource.Handle);
         _net.Dispose();
+
+        // Clean up temp files for incoming file entries
+        foreach (var entry in _localItems.OfType<ClipboardFileEntry>().Where(f => f.IsIncoming))
+            CleanupTempFile(entry);
+        foreach (var peer in _peers.Values)
+            foreach (var entry in peer.Items.OfType<ClipboardFileEntry>().Where(f => f.IsIncoming))
+                CleanupTempFile(entry);
+    }
+
+    // --- File transfer: sender ---
+
+    private async Task SendFileToPeers(ClipboardFileEntry fileEntry)
+    {
+        if (_peers.IsEmpty)
+        {
+            fileEntry.IsShared = false;
+            StatusText.Text = "No peers discovered yet";
+            return;
+        }
+        if (string.IsNullOrEmpty(fileEntry.LocalPath) || !File.Exists(fileEntry.LocalPath))
+        {
+            fileEntry.IsShared = false;
+            StatusText.Text = "Source file not found";
+            return;
+        }
+
+        StatusText.Text = $"Sending {fileEntry.FileName} to {_peers.Count} peer(s)...";
+
+        // Fresh transferId per Share — receiver gets a distinct entry each time,
+        // no orphan/overwrite from re-Share of the same source.
+        var path = fileEntry.LocalPath!;
+        var transferId = Guid.NewGuid().ToString("N")[..12];
+        var sendTasks = _peers.Values.Select(async peer =>
+        {
+            try
+            {
+                await _net.SendFileAsync(peer.Address, peer.Port, path, transferId);
+                return true;
+            }
+            catch { return false; }
+        }).ToList();
+        var results = await Task.WhenAll(sendTasks);
+        int ok = results.Count(r => r);
+        StatusText.Text = ok > 0
+            ? $"Sent {fileEntry.FileName} to {ok} peer(s)"
+            : "File send failed — peers unreachable";
+    }
+
+    // --- File transfer: receiver events ---
+
+    private void OnFileStarted(IncomingFileStart f)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (!_peers.ContainsKey(f.SenderId))
+            {
+                var newPeer = new PeerInfo
+                {
+                    InstanceId = f.SenderId,
+                    Name = f.SenderName,
+                    Address = f.SenderAddress,
+                    Port = f.SenderPort,
+                    LastSeen = DateTime.Now
+                };
+                _peers[f.SenderId] = newPeer;
+                AddPeerTab(newPeer);
+                UpdateStatus();
+            }
+            var peer = _peers[f.SenderId];
+            peer.LastSeen = DateTime.Now;
+            if (!peer.IsOnline)
+            {
+                peer.IsOnline = true;
+                if (_peerHeaderParts.TryGetValue(f.SenderId, out var dotParts))
+                    dotParts.dot.Fill = Brush("ThemeGreen");
+            }
+
+            var entry = new ClipboardFileEntry
+            {
+                FileId = f.FileId,
+                FileName = f.FileName,
+                FileSize = f.FileSize,
+                IsIncoming = true
+            };
+            _incomingFiles[f.FileId] = entry;
+            peer.Items.Insert(0, entry);
+            while (peer.Items.Count > MaxPeerItems)
+                peer.Items.RemoveAt(peer.Items.Count - 1);
+
+            // Unread badge
+            if (_peerTabs.TryGetValue(f.SenderId, out var tab)
+                && PeerTabs.SelectedItem != tab)
+            {
+                peer.UnreadCount++;
+                if (_peerHeaderParts.TryGetValue(f.SenderId, out var parts))
+                {
+                    parts.badge.Text = peer.UnreadCount.ToString();
+                    parts.badge.Visibility = Visibility.Visible;
+                }
+            }
+        });
+    }
+
+    private void OnFileProgress(IncomingFileProgress p)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_incomingFiles.TryGetValue(p.FileId, out var entry))
+                entry.BytesTransferred = p.BytesReceived;
+        });
+    }
+
+    private void OnFileCompleted(IncomingFileCompleted c)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_incomingFiles.TryGetValue(c.FileId, out var entry))
+            {
+                entry.LocalPath = c.LocalPath;
+                entry.BytesTransferred = entry.FileSize;
+                entry.IsComplete = true;
+            }
+        });
+    }
+
+    private void OnFileFailed(IncomingFileFailed f)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_incomingFiles.TryGetValue(f.FileId, out var entry))
+            {
+                entry.IsFailed = true;
+                StatusText.Text = $"Failed to receive {entry.FileName}: {f.Reason}";
+            }
+        });
+    }
+
+    // --- File actions (receiver-side buttons) ---
+
+    private void CopyFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.DataContext is not ClipboardFileEntry fe) return;
+        if (string.IsNullOrEmpty(fe.LocalPath) || !File.Exists(fe.LocalPath))
+        {
+            StatusText.Text = "File no longer available";
+            return;
+        }
+
+        var paths = new System.Collections.Specialized.StringCollection { fe.LocalPath };
+        for (int i = 0; i < 5; i++)
+        {
+            try { Clipboard.SetFileDropList(paths); StatusText.Text = $"Copied {fe.FileName} to clipboard"; return; }
+            catch (System.Runtime.InteropServices.COMException) when (i < 4)
+            { Thread.Sleep(10); }
+        }
+        StatusText.Text = "Clipboard busy — try again";
+    }
+
+    private async void SaveFileAs_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.DataContext is not ClipboardFileEntry fe) return;
+        if (string.IsNullOrEmpty(fe.LocalPath) || !File.Exists(fe.LocalPath))
+        {
+            StatusText.Text = "File no longer available";
+            return;
+        }
+
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = fe.FileName,
+            Filter = "All files (*.*)|*.*"
+        };
+        if (dlg.ShowDialog() != true) return;
+
+        var source = fe.LocalPath;
+        var target = dlg.FileName;
+        StatusText.Text = $"Saving {fe.FileName}...";
+        try
+        {
+            await Task.Run(() => File.Copy(source, target, overwrite: true));
+            StatusText.Text = $"Saved to {target}";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Save failed: {ex.Message}";
+        }
     }
 }

@@ -13,6 +13,16 @@ public record IncomingMessage(
     string SenderId, string SenderName, int SenderPort,
     string Text, IPAddress SenderAddress, bool Encrypted = false);
 
+public record IncomingFileStart(
+    string SenderId, string SenderName, IPAddress SenderAddress, int SenderPort,
+    string FileId, string FileName, long FileSize);
+
+public record IncomingFileProgress(string FileId, long BytesReceived);
+
+public record IncomingFileCompleted(string FileId, string LocalPath);
+
+public record IncomingFileFailed(string FileId, string Reason);
+
 public class NetworkService : IDisposable
 {
     public const int DiscoveryPort = 9850;
@@ -37,6 +47,10 @@ public class NetworkService : IDisposable
 
     public event Action<PeerAnnounce>? PeerSeen;
     public event Action<IncomingMessage>? MessageReceived;
+    public event Action<IncomingFileStart>? FileStarted;
+    public event Action<IncomingFileProgress>? FileProgress;
+    public event Action<IncomingFileCompleted>? FileCompleted;
+    public event Action<IncomingFileFailed>? FileFailed;
 
     public void Start()
     {
@@ -301,23 +315,32 @@ public class NetworkService : IDisposable
         {
             using (tcp)
             {
-                using var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
-                cts.CancelAfter(TimeSpan.FromSeconds(10));
+                using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                headerCts.CancelAfter(TimeSpan.FromSeconds(10));
 
                 var stream = tcp.GetStream();
 
                 var lenBuf = new byte[4];
-                await stream.ReadExactlyAsync(lenBuf, cts.Token);
+                await stream.ReadExactlyAsync(lenBuf, headerCts.Token);
                 int len = BitConverter.ToInt32(lenBuf);
                 if (len is <= 0 or > 10_000_000) return;
 
                 var buf = new byte[len];
-                await stream.ReadExactlyAsync(buf, cts.Token);
+                await stream.ReadExactlyAsync(buf, headerCts.Token);
 
                 var json = Encoding.UTF8.GetString(buf);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 var remoteIp = ((IPEndPoint)tcp.Client.RemoteEndPoint!).Address;
+
+                var msgType = root.TryGetProperty("type", out var tProp)
+                    ? tProp.GetString() : "text";
+
+                if (msgType == "file")
+                {
+                    await ReceiveFileStream(stream, root, remoteIp);
+                    return;
+                }
 
                 var encrypted = root.TryGetProperty("encrypted", out var encProp)
                     && encProp.GetBoolean();
@@ -334,6 +357,74 @@ public class NetworkService : IDisposable
         catch { }
     }
 
+    private async Task ReceiveFileStream(NetworkStream stream, JsonElement header, IPAddress remoteIp)
+    {
+        var fileId = header.GetProperty("fileId").GetString()!;
+        var fileName = header.GetProperty("fileName").GetString()!;
+        var fileSize = header.GetProperty("fileSize").GetInt64();
+        var senderId = header.GetProperty("senderId").GetString()!;
+        var senderName = header.GetProperty("senderName").GetString()!;
+        var senderPort = header.GetProperty("senderPort").GetInt32();
+
+        // Reject malformed fileId — protects %TEMP%/NetClipboard/<fileId> from path traversal.
+        if (fileId.Length is < 8 or > 32 || !fileId.All(IsHexLower))
+            return;
+        if (fileSize < 0) return;
+
+        var safeName = string.Join("_",
+            Path.GetFileName(fileName).Split(Path.GetInvalidFileNameChars()));
+        if (string.IsNullOrWhiteSpace(safeName)) safeName = "received";
+
+        var dir = Path.Combine(Path.GetTempPath(), "NetClipboard", fileId);
+        Directory.CreateDirectory(dir);
+        var tempPath = Path.Combine(dir, safeName);
+
+        FileStarted?.Invoke(new IncomingFileStart(
+            senderId, senderName, remoteIp, senderPort, fileId, fileName, fileSize));
+
+        long received = 0;
+        var lastProgressReport = DateTime.MinValue;
+        try
+        {
+            await using var fs = File.Create(tempPath);
+            var chunkLenBuf = new byte[4];
+            while (true)
+            {
+                using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                chunkCts.CancelAfter(TimeSpan.FromSeconds(30));
+
+                await stream.ReadExactlyAsync(chunkLenBuf, chunkCts.Token);
+                int chunkLen = BitConverter.ToInt32(chunkLenBuf);
+                if (chunkLen == 0) break;
+                if (chunkLen < 0 || chunkLen > 1_048_576)
+                    throw new InvalidDataException($"Invalid chunk length {chunkLen}");
+
+                var chunk = new byte[chunkLen];
+                await stream.ReadExactlyAsync(chunk, chunkCts.Token);
+                received += chunkLen;
+                if (received > fileSize)
+                    throw new InvalidDataException("Received bytes exceed declared size");
+                await fs.WriteAsync(chunk.AsMemory(0, chunkLen), _cts.Token);
+
+                var now = DateTime.UtcNow;
+                if ((now - lastProgressReport).TotalMilliseconds > 200)
+                {
+                    FileProgress?.Invoke(new IncomingFileProgress(fileId, received));
+                    lastProgressReport = now;
+                }
+            }
+            await fs.FlushAsync(_cts.Token);
+            FileProgress?.Invoke(new IncomingFileProgress(fileId, received));
+            FileCompleted?.Invoke(new IncomingFileCompleted(fileId, tempPath));
+        }
+        catch (Exception ex)
+        {
+            try { File.Delete(tempPath); } catch { }
+            try { Directory.Delete(dir, true); } catch { }
+            FileFailed?.Invoke(new IncomingFileFailed(fileId, ex.GetType().Name));
+        }
+    }
+
     public async Task SendTextAsync(IPAddress address, int port, string text, bool encrypted = false, CancellationToken ct = default)
     {
         var obj = new
@@ -341,6 +432,7 @@ public class NetworkService : IDisposable
             senderId = _instanceId,
             senderName = MachineName,
             senderPort = TcpPort,
+            type = "text",
             text,
             encrypted
         };
@@ -356,6 +448,75 @@ public class NetworkService : IDisposable
         await stream.WriteAsync(lenBytes, cts.Token);
         await stream.WriteAsync(bytes, cts.Token);
         await stream.FlushAsync(cts.Token);
+    }
+
+    public async Task SendFileAsync(IPAddress address, int port, string filePath,
+        string fileId, IProgress<long>? progress = null, CancellationToken ct = default)
+    {
+        var info = new FileInfo(filePath);
+        if (!info.Exists) throw new FileNotFoundException(filePath);
+
+        var header = new
+        {
+            senderId = _instanceId,
+            senderName = MachineName,
+            senderPort = TcpPort,
+            type = "file",
+            fileId,
+            fileName = info.Name,
+            fileSize = info.Length
+        };
+        var headerBytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(header));
+        var headerLen = BitConverter.GetBytes(headerBytes.Length);
+
+        // Connect timeout 3s; after that, per-chunk timeout 30s.
+        using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
+        connectCts.CancelAfter(TimeSpan.FromSeconds(3));
+
+        using var tcp = new TcpClient();
+        await tcp.ConnectAsync(address, port, connectCts.Token);
+        var stream = tcp.GetStream();
+        await stream.WriteAsync(headerLen, connectCts.Token);
+        await stream.WriteAsync(headerBytes, connectCts.Token);
+
+        const int chunkSize = 64 * 1024;
+        var buf = new byte[chunkSize];
+        long sent = 0;
+        var lastReport = DateTime.MinValue;
+
+        await using var fs = File.OpenRead(filePath);
+        while (true)
+        {
+            int n;
+            using (var readCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct))
+            {
+                readCts.CancelAfter(TimeSpan.FromSeconds(30));
+                n = await fs.ReadAsync(buf.AsMemory(0, chunkSize), readCts.Token);
+            }
+            if (n == 0) break;
+
+            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
+            writeCts.CancelAfter(TimeSpan.FromSeconds(30));
+            await stream.WriteAsync(BitConverter.GetBytes(n), writeCts.Token);
+            await stream.WriteAsync(buf.AsMemory(0, n), writeCts.Token);
+
+            sent += n;
+            var now = DateTime.UtcNow;
+            if ((now - lastReport).TotalMilliseconds > 200)
+            {
+                progress?.Report(sent);
+                lastReport = now;
+            }
+        }
+
+        // EOF marker
+        using (var eofCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct))
+        {
+            eofCts.CancelAfter(TimeSpan.FromSeconds(10));
+            await stream.WriteAsync(BitConverter.GetBytes(0), eofCts.Token);
+            await stream.FlushAsync(eofCts.Token);
+        }
+        progress?.Report(sent);
     }
 
     public void Dispose()

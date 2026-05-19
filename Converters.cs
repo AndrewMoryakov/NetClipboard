@@ -1,8 +1,20 @@
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Data;
 
 namespace NetClipboard;
+
+/// <summary>
+/// Picks file vs text template per entry type.
+/// </summary>
+public class EntryTemplateSelector : DataTemplateSelector
+{
+    public DataTemplate? TextTemplate { get; set; }
+    public DataTemplate? FileTemplate { get; set; }
+    public override DataTemplate? SelectTemplate(object item, DependencyObject container)
+        => item is ClipboardFileEntry ? FileTemplate : TextTemplate;
+}
 
 /// <summary>
 /// Returns Visible when IsEncrypted=true AND IsDecrypted=false (i.e. still locked).
