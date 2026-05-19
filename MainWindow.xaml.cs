@@ -441,20 +441,30 @@ public partial class MainWindow : Window
         StatusMsg = $"Sending to {_peers.Count} peer(s)...";
 
         var sendTasks = _peers.Values.Select(async peer =>
-        {
-            try
-            {
-                await _net.SendTextAsync(peer.Address, peer.Port, textToSend, encrypted);
-                return true;
-            }
-            catch { return false; }
-        }).ToList();
+            (peer.Name, await TrySendText(peer, textToSend, encrypted))
+        ).ToList();
         var results = await Task.WhenAll(sendTasks);
-        int ok = results.Count(r => r);
 
-        StatusMsg = ok > 0
-            ? $"Synced to {ok} peer(s)" + (encrypted ? " (encrypted)" : "")
-            : "Sync failed — peers unreachable";
+        var label = encrypted ? "encrypted text" : "text";
+        StatusMsg = FormatSendOutcome(label, results, ownCancelled: false);
+    }
+
+    private async Task<(bool ok, string? reason)> TrySendText(
+        PeerInfo peer, string text, bool encrypted)
+    {
+        try
+        {
+            await _net.SendTextAsync(peer.Address, peer.Port, text, encrypted);
+            return (true, null);
+        }
+        catch (OperationCanceledException)
+        { return (false, "timeout"); }
+        catch (System.Net.Sockets.SocketException)
+        { return (false, "unreachable"); }
+        catch (System.IO.IOException)
+        { return (false, "interrupted"); }
+        catch (Exception ex)
+        { return (false, ex.GetType().Name); }
     }
 
     // --- Unlock button (decrypt received item) ---
@@ -801,6 +811,24 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Confirm large outgoing files.
+        if (fileEntry.FileSize > LargeFileThresholdBytes)
+        {
+            var sizeText = ClipboardFileEntry.FormatBytes(fileEntry.FileSize);
+            var answer = MessageBox.Show(this,
+                $"Send '{fileEntry.FileName}' ({sizeText}) to {_peers.Count} peer(s)?\n\n" +
+                "This may take a while and use significant bandwidth.",
+                "Large file outgoing",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes)
+            {
+                fileEntry.IsShared = false;
+                StatusMsg = $"Not sending {fileEntry.FileName}";
+                return;
+            }
+        }
+
         StatusMsg = $"Sending {fileEntry.FileName} to {_peers.Count} peer(s)...";
 
         var path = fileEntry.LocalPath!;
@@ -813,22 +841,10 @@ public partial class MainWindow : Window
         {
             var token = cts.Token;
             var sendTasks = _peers.Values.Select(async peer =>
-            {
-                try
-                {
-                    await _net.SendFileAsync(peer.Address, peer.Port, path, transferId, ct: token);
-                    return true;
-                }
-                catch { return false; }
-            }).ToList();
+                (peer.Name, await TrySendFile(peer, path, transferId, token, cts))
+            ).ToList();
             var results = await Task.WhenAll(sendTasks);
-            int ok = results.Count(r => r);
-
-            StatusMsg = cts.IsCancellationRequested
-                ? $"Cancelled sending {fileEntry.FileName}"
-                : ok > 0
-                    ? $"Sent {fileEntry.FileName} to {ok} peer(s)"
-                    : "File send failed — peers unreachable";
+            StatusMsg = FormatSendOutcome(fileEntry.FileName, results, cts.IsCancellationRequested);
         }
         finally
         {
@@ -836,6 +852,54 @@ public partial class MainWindow : Window
             fileEntry.IsSending = false;
             cts.Dispose();
         }
+    }
+
+    private async Task<(bool ok, string? reason)> TrySendFile(
+        PeerInfo peer, string path, string transferId,
+        CancellationToken token, CancellationTokenSource ownCts)
+    {
+        try
+        {
+            await _net.SendFileAsync(peer.Address, peer.Port, path, transferId, ct: token);
+            return (true, null);
+        }
+        catch (OperationCanceledException) when (ownCts.IsCancellationRequested)
+        { return (false, "cancelled"); }
+        catch (OperationCanceledException)
+        { return (false, "timeout"); }
+        catch (System.Net.Sockets.SocketException)
+        { return (false, "unreachable"); }
+        catch (System.IO.IOException)
+        { return (false, "interrupted"); }
+        catch (Exception ex)
+        { return (false, ex.GetType().Name); }
+    }
+
+    /// <summary>
+    /// Per-peer outcome summary for the status bar. Distinguishes
+    /// connect-fail, mid-stream interruption (likely receiver cancel),
+    /// timeout, and own cancellation.
+    /// </summary>
+    private static string FormatSendOutcome(
+        string what,
+        (string Name, (bool ok, string? reason) result)[] results,
+        bool ownCancelled)
+    {
+        if (ownCancelled) return $"Cancelled sending {what}";
+
+        int ok = results.Count(r => r.result.ok);
+        int total = results.Length;
+        if (total == 0) return $"No peers for {what}";
+        if (ok == total) return $"Sent {what} to {ok} peer(s)";
+
+        var failed = results.Where(r => !r.result.ok).ToList();
+        var shown = failed.Take(3).Select(r => $"{r.Name} ({r.result.reason})");
+        var more = failed.Count > 3 ? $" +{failed.Count - 3} more" : "";
+        var failList = string.Join(", ", shown) + more;
+
+        return ok == 0
+            ? $"Failed to send {what}: {failList}"
+            : $"Sent {what} to {ok}/{total} — failed: {failList}";
     }
 
     private void CancelFile_Click(object sender, RoutedEventArgs e)
