@@ -38,7 +38,7 @@ public partial class MainWindow : Window
     {
         set
         {
-            StatusMsg = value;
+            StatusText.Text = value;
             _statusLockedUntil = DateTime.Now.AddSeconds(StatusHoldSeconds);
         }
     }
