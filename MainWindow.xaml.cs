@@ -101,6 +101,67 @@ public partial class MainWindow : Window
         var onlineTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         onlineTimer.Tick += OnlineCheck_Tick;
         onlineTimer.Start();
+
+        // Auto-update: clean up leftover .old from previous upgrade, then
+        // fire a non-blocking check against GitHub Releases.
+        Updater.CleanupOldVersion();
+        _ = CheckForUpdateAsync();
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        try
+        {
+            // Defer briefly so the user sees the main window first.
+            await Task.Delay(TimeSpan.FromSeconds(5));
+
+            var info = await Updater.CheckAsync();
+            if (info == null) return;
+
+            var answer = MessageBox.Show(this,
+                $"Update available: v{info.Latest}\n" +
+                $"Currently installed: v{info.Current}\n\n" +
+                "Download and install now?",
+                "NetClipboard update",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Information);
+            if (answer != MessageBoxResult.Yes) return;
+
+            StatusMsg = "Downloading update...";
+            var progress = new Progress<(long d, long t)>(p =>
+            {
+                var mb = p.d / 1024 / 1024;
+                StatusMsg = p.t > 0
+                    ? $"Downloading update: {(int)(p.d * 100 / p.t)}% ({mb} / {p.t / 1024 / 1024} MB)"
+                    : $"Downloading update: {mb} MB";
+            });
+
+            string downloaded;
+            try
+            {
+                downloaded = await Updater.DownloadAsync(info.DownloadUrl, progress);
+            }
+            catch (Exception ex)
+            {
+                StatusMsg = $"Update download failed: {ex.Message}";
+                return;
+            }
+
+            StatusMsg = "Installing update — restarting...";
+            await Task.Delay(800);
+            try
+            {
+                Updater.ApplyAndRestart(downloaded);
+            }
+            catch (Exception ex)
+            {
+                StatusMsg = $"Update install failed: {ex.Message}";
+            }
+        }
+        catch
+        {
+            // Offline, GitHub down, parse error — silently ignore.
+        }
     }
 
     // --- Theme toggle ---
