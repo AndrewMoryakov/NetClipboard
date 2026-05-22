@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<ClipboardEntry> _localItems = new();
     private readonly Dictionary<string, ClipboardFileEntry> _incomingFiles = new();
     private readonly Dictionary<ClipboardFileEntry, CancellationTokenSource> _localSendCts = new();
+    private UpdateInfo? _availableUpdate;
     private const long LargeFileThresholdBytes = 300L * 1024 * 1024;
     private HwndSource? _hwndSource;
     private TrayIcon? _tray;
@@ -122,65 +123,9 @@ public partial class MainWindow : Window
             var info = await Updater.CheckAsync();
             if (info == null) return;
 
-            var answer = MessageBox.Show(this,
-                $"Update available: v{info.Latest}\n" +
-                $"Currently installed: v{info.Current}\n\n" +
-                $"Release: {info.ReleaseUrl}\n\n" +
-                "Download and install now?",
-                "NetClipboard update",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information);
-            if (answer != MessageBoxResult.Yes) return;
-
-            if (!Updater.CanWriteInstallDirectory(out var writeError))
-            {
-                StatusMsg = "Update requires manual install from the release page";
-                MessageBox.Show(this,
-                    "NetClipboard cannot write to its install directory, so automatic update is not available.\n\n" +
-                    $"Release: {info.ReleaseUrl}\n\n" +
-                    $"Details: {writeError}",
-                    "NetClipboard update",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-                return;
-            }
-
-            StatusMsg = "Downloading and verifying update...";
-            var progress = new Progress<(long d, long t)>(p =>
-            {
-                var mb = p.d / 1024 / 1024;
-                StatusMsg = p.t > 0
-                    ? $"Downloading update: {(int)(p.d * 100 / p.t)}% ({mb} / {p.t / 1024 / 1024} MB)"
-                    : $"Downloading update: {mb} MB";
-            });
-
-            string downloaded;
-            try
-            {
-                using var downloadCts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
-                downloaded = await Updater.DownloadAndVerifyAsync(info, progress, downloadCts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                StatusMsg = "Update download timed out";
-                return;
-            }
-            catch (Exception ex)
-            {
-                StatusMsg = $"Update download or verification failed: {ex.Message}";
-                return;
-            }
-
-            StatusMsg = "Installing update — restarting...";
-            await Task.Delay(800);
-            try
-            {
-                Updater.ApplyAndRestart(downloaded);
-            }
-            catch (Exception ex)
-            {
-                StatusMsg = $"Update install failed: {ex.Message}";
-            }
+            _availableUpdate = info;
+            StatusMsg = $"Update v{info.Latest} available. Open About to install.";
+            _tray?.ShowBalloon("NetClipboard update", $"Version {info.Latest} is available.");
         }
         catch
         {
@@ -204,7 +149,7 @@ public partial class MainWindow : Window
 
     private void About_Click(object sender, RoutedEventArgs e)
     {
-        var about = new AboutWindow { Owner = this };
+        var about = new AboutWindow(_availableUpdate) { Owner = this };
         about.ShowDialog();
     }
 

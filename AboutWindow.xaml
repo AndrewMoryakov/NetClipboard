@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="About NetClipboard"
-        Width="420" Height="360"
+        Width="440" Height="390"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
         Background="{DynamicResource ThemeBase}">
@@ -89,6 +89,15 @@
                            LineHeight="18"
                            Margin="0,4,0,10"/>
 
+                <TextBlock x:Name="AvailableVersionText"
+                           Text="No update selected."
+                           TextWrapping="Wrap"
+                           Foreground="{DynamicResource ThemeText}"
+                           FontSize="12"
+                           FontWeight="SemiBold"
+                           LineHeight="18"
+                           Margin="0,0,0,6"/>
+
                 <TextBlock x:Name="UpdateStatusText"
                            Text="No update check has run in this window."
                            TextWrapping="Wrap"
@@ -100,6 +109,7 @@
 
         <Grid Grid.Row="2" Margin="0,14,0,0">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -120,6 +130,21 @@
             </Button>
 
             <Button Grid.Column="1"
+                    x:Name="InstallUpdateBtn"
+                    Style="{StaticResource AboutBtn}"
+                    Margin="8,0,0,0"
+                    Click="InstallUpdate_Click"
+                    IsEnabled="False">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets"
+                               FontSize="13" Margin="0,0,6,0"
+                               Foreground="{DynamicResource ThemeText}"/>
+                    <TextBlock Text="Install update"
+                               Foreground="{DynamicResource ThemeText}"/>
+                </StackPanel>
+            </Button>
+
+            <Button Grid.Column="2"
                     Style="{StaticResource AboutBtn}"
                     Margin="8,0,0,0"
                     Click="Releases_Click">
@@ -132,7 +157,7 @@
                 </StackPanel>
             </Button>
 
-            <Button Grid.Column="3"
+            <Button Grid.Column="4"
                     Style="{StaticResource AboutBtn}"
                     Click="Close_Click">
                 <TextBlock Text="Close" Foreground="{DynamicResource ThemeText}"/>
