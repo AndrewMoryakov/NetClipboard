@@ -125,13 +125,27 @@ public partial class MainWindow : Window
             var answer = MessageBox.Show(this,
                 $"Update available: v{info.Latest}\n" +
                 $"Currently installed: v{info.Current}\n\n" +
+                $"Release: {info.ReleaseUrl}\n\n" +
                 "Download and install now?",
                 "NetClipboard update",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Information);
             if (answer != MessageBoxResult.Yes) return;
 
-            StatusMsg = "Downloading update...";
+            if (!Updater.CanWriteInstallDirectory(out var writeError))
+            {
+                StatusMsg = "Update requires manual install from the release page";
+                MessageBox.Show(this,
+                    "NetClipboard cannot write to its install directory, so automatic update is not available.\n\n" +
+                    $"Release: {info.ReleaseUrl}\n\n" +
+                    $"Details: {writeError}",
+                    "NetClipboard update",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            StatusMsg = "Downloading and verifying update...";
             var progress = new Progress<(long d, long t)>(p =>
             {
                 var mb = p.d / 1024 / 1024;
@@ -143,11 +157,17 @@ public partial class MainWindow : Window
             string downloaded;
             try
             {
-                downloaded = await Updater.DownloadAsync(info.DownloadUrl, progress);
+                using var downloadCts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+                downloaded = await Updater.DownloadAndVerifyAsync(info, progress, downloadCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                StatusMsg = "Update download timed out";
+                return;
             }
             catch (Exception ex)
             {
-                StatusMsg = $"Update download failed: {ex.Message}";
+                StatusMsg = $"Update download or verification failed: {ex.Message}";
                 return;
             }
 
@@ -180,6 +200,12 @@ public partial class MainWindow : Window
         };
         ThemeManager.Apply(next);
         UpdateThemeButton();
+    }
+
+    private void About_Click(object sender, RoutedEventArgs e)
+    {
+        var about = new AboutWindow { Owner = this };
+        about.ShowDialog();
     }
 
     private void UpdateThemeButton()

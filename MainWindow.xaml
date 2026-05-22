@@ -605,7 +605,26 @@
         <!-- Status bar -->
         <Border Grid.Row="3" Background="{DynamicResource ThemeSurface0}" BorderBrush="{DynamicResource ThemeSurface1}"
                 BorderThickness="1" CornerRadius="4" Padding="10,6">
-            <TextBlock x:Name="StatusText" Foreground="{DynamicResource ThemeOverlay0}" FontSize="12"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" x:Name="StatusText"
+                           Foreground="{DynamicResource ThemeOverlay0}"
+                           FontSize="12"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+
+                <Button Grid.Column="1" Click="About_Click"
+                        Style="{StaticResource DarkBtn}"
+                        ToolTip="About NetClipboard" Padding="6,3"
+                        VerticalAlignment="Center" Margin="8,0,0,0">
+                    <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets"
+                               FontSize="13" Foreground="{DynamicResource ThemeText}"/>
+                </Button>
+            </Grid>
         </Border>
     </Grid>
 </Window>

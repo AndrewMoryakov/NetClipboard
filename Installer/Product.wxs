@@ -1,0 +1,73 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="NetClipboard"
+      Manufacturer="Andrew Moryakov"
+      Version="$(var.ProductVersion)"
+      UpgradeCode="{65E36E22-6D35-496C-A0BD-56D7F7C6C825}"
+      Scope="perUser">
+
+    <SummaryInformation Description="NetClipboard installer"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer version of NetClipboard is already installed."/>
+    <MediaTemplate EmbedCab="yes"/>
+
+    <Icon Id="NetClipboardIcon" SourceFile="$(var.PublishDir)\NetClipboard.exe"/>
+    <Property Id="ARPPRODUCTICON" Value="NetClipboardIcon"/>
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="InstallFolder" Name="NetClipboard">
+        <Component Id="AppExe" Guid="{B82DB9D4-0165-4F55-BA67-EB9199D11622}">
+          <File Id="AppExeFile"
+                Source="$(var.PublishDir)\NetClipboard.exe"/>
+          <RemoveFolder Id="RemoveInstallFolder" On="uninstall"/>
+          <RegistryValue Root="HKCU"
+                         Key="Software\NetClipboard"
+                         Name="InstallFolder"
+                         Type="string"
+                         Value="[InstallFolder]"
+                         KeyPath="yes"/>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuAppFolder" Name="NetClipboard">
+        <Component Id="StartMenuShortcut" Guid="{463A257E-C37F-4743-A449-B5CF99248E06}">
+          <Shortcut Id="StartMenuShortcut"
+                    Name="NetClipboard"
+                    Description="Open NetClipboard"
+                    Target="[InstallFolder]NetClipboard.exe"
+                    WorkingDirectory="InstallFolder"/>
+          <RemoveFolder Id="RemoveProgramMenuAppFolder" On="uninstall"/>
+          <RegistryValue Root="HKCU"
+                         Key="Software\NetClipboard"
+                         Name="StartMenuShortcut"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes"/>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="{531996C7-3167-4CFC-AE50-BC89FB2EC38D}">
+        <Shortcut Id="DesktopShortcut"
+                  Name="NetClipboard"
+                  Description="Open NetClipboard"
+                  Target="[InstallFolder]NetClipboard.exe"
+                  WorkingDirectory="InstallFolder"/>
+        <RegistryValue Root="HKCU"
+                       Key="Software\NetClipboard"
+                       Name="DesktopShortcut"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes"/>
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="NetClipboard" Level="1">
+      <ComponentRef Id="AppExe"/>
+      <ComponentRef Id="StartMenuShortcut"/>
+      <ComponentRef Id="DesktopShortcut"/>
+    </Feature>
+  </Package>
+</Wix>
