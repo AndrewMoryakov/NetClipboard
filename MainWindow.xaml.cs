@@ -758,6 +758,15 @@ public partial class MainWindow : Window
 
     private void ClearAll_Click(object sender, RoutedEventArgs e)
     {
+        var answer = MessageBox.Show(this,
+            "Clear all local and received clipboard items?\n\n" +
+            "Active file transfers will be cancelled and received temporary files will be removed.",
+            "Clear all clipboard items",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes)
+            return;
+
         CancelOutgoingFiles(_localItems);
         foreach (var peer in _peers.Values)
             CancelOutgoingFiles(peer.Items);
