@@ -737,18 +737,49 @@ public partial class MainWindow : Window
     {
         if (PeerTabs.SelectedIndex == 0)
         {
+            foreach (var entry in _localItems.OfType<ClipboardFileEntry>().ToList())
+                CleanupFileEntry(entry);
+            CancelOutgoingFiles(_localItems);
             _localItems.Clear();
             StatusMsg = "Local clipboard cleared";
         }
         else if (PeerTabs.SelectedItem is TabItem tab && tab.Tag is string id
                  && _peers.TryGetValue(id, out var peer))
         {
+            foreach (var entry in peer.Items.OfType<ClipboardFileEntry>().ToList())
+                CleanupFileEntry(entry);
             peer.Items.Clear();
             peer.UnreadCount = 0;
             if (_peerHeaderParts.TryGetValue(id, out var parts))
                 parts.badge.Visibility = Visibility.Collapsed;
             StatusMsg = $"Cleared items from {peer.Name}";
         }
+    }
+
+    private void ClearAll_Click(object sender, RoutedEventArgs e)
+    {
+        CancelOutgoingFiles(_localItems);
+        foreach (var peer in _peers.Values)
+            CancelOutgoingFiles(peer.Items);
+
+        foreach (var entry in _localItems.OfType<ClipboardFileEntry>().ToList())
+            CleanupFileEntry(entry);
+
+        _localItems.Clear();
+
+        foreach (var (id, peer) in _peers)
+        {
+            foreach (var entry in peer.Items.OfType<ClipboardFileEntry>().ToList())
+                CleanupFileEntry(entry);
+
+            peer.Items.Clear();
+            peer.UnreadCount = 0;
+            if (_peerHeaderParts.TryGetValue(id, out var parts))
+                parts.badge.Visibility = Visibility.Collapsed;
+        }
+
+        _incomingFiles.Clear();
+        StatusMsg = "All clipboard items cleared";
     }
 
     private void DeleteItem_Click(object sender, RoutedEventArgs e)
@@ -768,9 +799,31 @@ public partial class MainWindow : Window
 
         // Clean up received-file temp data
         if (entry is ClipboardFileEntry fe && fe.IsIncoming)
+            CleanupFileEntry(fe);
+    }
+
+    private void CancelOutgoingFiles(IEnumerable<ClipboardEntry> entries)
+    {
+        foreach (var file in entries.OfType<ClipboardFileEntry>().Where(f => !f.IsIncoming).ToList())
         {
+            if (_localSendCts.TryGetValue(file, out var cts))
+            {
+                try { cts.Cancel(); } catch { }
+            }
+        }
+    }
+
+    private void CleanupFileEntry(ClipboardFileEntry fe)
+    {
+        if (fe.IsIncoming)
+        {
+            _net.CancelIncomingFile(fe.FileId);
             _incomingFiles.Remove(fe.FileId);
             CleanupTempFile(fe);
+        }
+        else if (_localSendCts.TryGetValue(fe, out var cts))
+        {
+            try { cts.Cancel(); } catch { }
         }
     }
 
