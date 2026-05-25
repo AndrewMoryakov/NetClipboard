@@ -70,7 +70,9 @@ public class ClipboardEntry : INotifyPropertyChanged
         set { if (_cipherText != value) { _cipherText = value; OnPropertyChanged(); } }
     }
 
-    public string TimestampStr => Timestamp.ToString("HH:mm:ss");
+    public string TimestampStr => Timestamp.Date == DateTime.Today
+        ? Timestamp.ToString("HH:mm:ss")
+        : Timestamp.ToString("MMM d, HH:mm:ss");
 
     public string Preview => Text.Length > 300 ? Text[..300] + "..." : Text;
 
