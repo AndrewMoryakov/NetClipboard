@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:NetClipboard"
         Title="NetClipboard" Height="650" Width="540"
+        MinWidth="480" MinHeight="420"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource ThemeBase}">
 
@@ -10,7 +11,6 @@
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <local:EncryptedLockedConverter x:Key="EncryptedLockedVis"/>
         <local:EncryptedLockedInverseConverter x:Key="EncryptedLockedInverseVis"/>
-        <BlurEffect x:Key="EncryptedBlur" Radius="8"/>
 
         <!-- Dark flat button style -->
         <Style x:Key="DarkBtn" TargetType="Button">
@@ -34,6 +34,54 @@
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ThemeSurface2}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ListBoxItem: strip default selection/hover highlight so only the card shows -->
+        <Style x:Key="CardListBoxItem" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <ContentPresenter HorizontalAlignment="Stretch"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ListBox with an empty-state placeholder. Placeholder text comes from Tag. -->
+        <Style x:Key="EntryListBox" TargetType="ListBox">
+            <Setter Property="ItemContainerStyle" Value="{StaticResource CardListBoxItem}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBox">
+                        <Grid>
+                            <ScrollViewer Focusable="False"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsPresenter/>
+                            </ScrollViewer>
+                            <TextBlock x:Name="Placeholder"
+                                       Text="{TemplateBinding Tag}"
+                                       Foreground="{DynamicResource ThemeOverlay0}"
+                                       FontSize="13" TextWrapping="Wrap"
+                                       TextAlignment="Center"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Margin="20"
+                                       Visibility="Collapsed"
+                                       IsHitTestVisible="False"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="HasItems" Value="False">
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -91,7 +139,8 @@
                     <ToggleButton Grid.Column="0" IsChecked="{Binding IsEncrypted}"
                                   Click="LockToggle_Click"
                                   VerticalAlignment="Top" Margin="0,0,4,0"
-                                  ToolTip="Encrypt before sharing">
+                                  ToolTip="Encrypt before sharing"
+                                  AutomationProperties.Name="Encrypt before sharing">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton">
                                 <Setter Property="Template">
@@ -131,7 +180,8 @@
                     <ToggleButton Grid.Column="1" IsChecked="{Binding IsShared}"
                                   Click="ShareToggle_Click"
                                   VerticalAlignment="Top" Margin="0,0,8,0"
-                                  ToolTip="Sync to peers">
+                                  ToolTip="Sync to peers"
+                                  AutomationProperties.Name="Sync to peers">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton">
                                 <Setter Property="Template">
@@ -170,7 +220,8 @@
                     <StackPanel Grid.Column="2" Margin="0,0,8,0" VerticalAlignment="Center">
                         <TextBlock x:Name="LocalText" Text="{Binding DisplayText}"
                                    TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                                   FontSize="13" Foreground="{DynamicResource ThemeText}"/>
+                                   FontSize="13" Foreground="{DynamicResource ThemeText}"
+                                   ToolTip="{Binding Text}"/>
                         <TextBlock Text="{Binding TimestampStr}" Foreground="{DynamicResource ThemeOverlay0}"
                                    FontSize="11" Margin="0,4,0,0"/>
                     </StackPanel>
@@ -186,6 +237,7 @@
                     <Button Grid.Column="4" Click="DeleteItem_Click"
                             VerticalAlignment="Top" Padding="4,4" Cursor="Hand"
                             Margin="2,0,0,0" ToolTip="Delete"
+                            AutomationProperties.Name="Delete"
                             Background="Transparent" BorderThickness="0">
                         <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="12" Foreground="{DynamicResource ThemeOverlay0}"/>
@@ -201,14 +253,14 @@
                     <Setter TargetName="ItemBorder" Property="BorderBrush" Value="{DynamicResource ThemeYellow}"/>
                     <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource ThemeCardHighlight}"/>
                 </DataTrigger>
-                <!-- Blur text + hide Copy when encrypted and not decrypted -->
+                <!-- Locked placeholder styling + hide Copy when encrypted and not decrypted -->
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding IsEncrypted}" Value="True"/>
                         <Condition Binding="{Binding IsDecrypted}" Value="False"/>
                     </MultiDataTrigger.Conditions>
-                    <Setter TargetName="LocalText" Property="Effect"
-                            Value="{StaticResource EncryptedBlur}"/>
+                    <Setter TargetName="LocalText" Property="FontStyle" Value="Italic"/>
+                    <Setter TargetName="LocalText" Property="Foreground" Value="{DynamicResource ThemeOverlay0}"/>
                     <Setter TargetName="LocalCopyBtn" Property="Visibility" Value="Collapsed"/>
                 </MultiDataTrigger>
             </DataTemplate.Triggers>
@@ -229,7 +281,8 @@
                     <StackPanel Grid.Column="0" Margin="0,0,8,0">
                         <TextBlock x:Name="RemoteText" Text="{Binding DisplayText}"
                                    TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                                   FontSize="13" Foreground="{DynamicResource ThemeText}"/>
+                                   FontSize="13" Foreground="{DynamicResource ThemeText}"
+                                   ToolTip="{Binding Text}"/>
                         <TextBlock Text="{Binding TimestampStr}" Foreground="{DynamicResource ThemeOverlay0}"
                                    FontSize="11" Margin="0,4,0,0"/>
                     </StackPanel>
@@ -249,6 +302,7 @@
                             Click="UnlockButton_Click"
                             Padding="6,4"
                             ToolTip="Decrypt with password"
+                            AutomationProperties.Name="Decrypt with password"
                             Visibility="{Binding IsEncrypted, Converter={StaticResource EncryptedLockedVis}}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE785;" FontFamily="Segoe MDL2 Assets"
@@ -263,6 +317,7 @@
                     <Button Grid.Column="2" Click="DeleteItem_Click"
                             VerticalAlignment="Top" Padding="4,4" Cursor="Hand"
                             Margin="2,0,0,0" ToolTip="Delete"
+                            AutomationProperties.Name="Delete"
                             Background="Transparent" BorderThickness="0">
                         <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="12" Foreground="{DynamicResource ThemeOverlay0}"/>
@@ -270,14 +325,14 @@
                 </Grid>
             </Border>
             <DataTemplate.Triggers>
-                <!-- Blur text when encrypted and not yet decrypted -->
+                <!-- Locked placeholder styling when encrypted and not yet decrypted -->
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding IsEncrypted}" Value="True"/>
                         <Condition Binding="{Binding IsDecrypted}" Value="False"/>
                     </MultiDataTrigger.Conditions>
-                    <Setter TargetName="RemoteText" Property="Effect"
-                            Value="{StaticResource EncryptedBlur}"/>
+                    <Setter TargetName="RemoteText" Property="FontStyle" Value="Italic"/>
+                    <Setter TargetName="RemoteText" Property="Foreground" Value="{DynamicResource ThemeOverlay0}"/>
                 </MultiDataTrigger>
                 <!-- Once decrypted, show copy and hide unlock -->
                 <DataTrigger Binding="{Binding IsDecrypted}" Value="True">
@@ -314,6 +369,7 @@
                                   Click="ShareToggle_Click"
                                   VerticalAlignment="Top" Margin="0,0,8,0"
                                   ToolTip="Sync to peers"
+                                  AutomationProperties.Name="Sync to peers"
                                   Visibility="{Binding ShowShareToggle, Converter={StaticResource BoolToVis}}">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton">
@@ -353,6 +409,7 @@
                     <Button Grid.Column="1" Click="CancelFile_Click"
                             VerticalAlignment="Top" Margin="0,0,8,0"
                             ToolTip="Cancel send"
+                            AutomationProperties.Name="Cancel send"
                             Width="36" Height="36" Padding="0"
                             Background="{DynamicResource ThemeSurface0}"
                             BorderBrush="{DynamicResource ThemeRed}"
@@ -382,6 +439,7 @@
                     <Button Grid.Column="3" Click="DeleteItem_Click"
                             VerticalAlignment="Top" Padding="4,4" Cursor="Hand"
                             Margin="2,0,0,0" ToolTip="Delete"
+                            AutomationProperties.Name="Delete"
                             Background="Transparent" BorderThickness="0">
                         <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
                                    FontSize="12" Foreground="{DynamicResource ThemeOverlay0}"/>
@@ -439,6 +497,7 @@
                                 VerticalAlignment="Top">
                         <Button Style="{StaticResource DarkBtn}" Padding="8,4"
                                 Click="CancelFile_Click" ToolTip="Cancel receive"
+                                AutomationProperties.Name="Cancel receive"
                                 Margin="0,0,4,0"
                                 Visibility="{Binding ShowProgress, Converter={StaticResource BoolToVis}}">
                             <StackPanel Orientation="Horizontal">
@@ -451,6 +510,7 @@
                         </Button>
                         <Button Style="{StaticResource DarkBtn}" Padding="8,4"
                                 Click="CopyFile_Click" ToolTip="Copy file to clipboard"
+                                AutomationProperties.Name="Copy file to clipboard"
                                 Margin="0,0,4,0"
                                 Visibility="{Binding ShowActions, Converter={StaticResource BoolToVis}}">
                             <StackPanel Orientation="Horizontal">
@@ -463,6 +523,7 @@
                         </Button>
                         <Button Style="{StaticResource DarkBtn}" Padding="8,4"
                                 Click="SaveFileAs_Click" ToolTip="Save to disk"
+                                AutomationProperties.Name="Save to disk"
                                 Margin="0,0,4,0"
                                 Visibility="{Binding ShowActions, Converter={StaticResource BoolToVis}}">
                             <StackPanel Orientation="Horizontal">
@@ -476,6 +537,7 @@
                         <Button Click="DeleteItem_Click"
                                 Padding="4,4" Cursor="Hand"
                                 ToolTip="Delete"
+                                AutomationProperties.Name="Delete"
                                 Background="Transparent" BorderThickness="0">
                             <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
                                        FontSize="12" Foreground="{DynamicResource ThemeOverlay0}"/>
@@ -540,7 +602,8 @@
 
                 <Button Grid.Column="0" Click="SetMasterPassword_Click"
                         Style="{StaticResource DarkBtn}"
-                        ToolTip="Set master password" Padding="6,4"
+                        ToolTip="Set master password"
+                        AutomationProperties.Name="Set master password" Padding="6,4"
                         VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE192;" FontFamily="Segoe MDL2 Assets"
@@ -553,7 +616,8 @@
 
                 <Button Grid.Column="1" Click="AddPeer_Click"
                         Style="{StaticResource DarkBtn}"
-                        ToolTip="Connect to peer by IP" Padding="6,4"
+                        ToolTip="Connect to peer by IP"
+                        AutomationProperties.Name="Connect to peer by IP" Padding="6,4"
                         VerticalAlignment="Center" Margin="4,0,0,0">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"
@@ -566,7 +630,8 @@
 
                 <Button Grid.Column="2" Click="ClearTab_Click"
                         Style="{StaticResource DarkBtn}"
-                        ToolTip="Clear current tab" Padding="6,4"
+                        ToolTip="Clear current tab"
+                        AutomationProperties.Name="Clear current tab" Padding="6,4"
                         VerticalAlignment="Center" Margin="4,0,0,0">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"
@@ -579,7 +644,8 @@
 
                 <Button Grid.Column="3" Click="ClearAll_Click"
                         Style="{StaticResource DarkBtn}"
-                        ToolTip="Clear all clipboard items" Padding="6,4"
+                        ToolTip="Clear all clipboard items"
+                        AutomationProperties.Name="Clear all clipboard items" Padding="6,4"
                         VerticalAlignment="Center" Margin="4,0,0,0">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE894;" FontFamily="Segoe MDL2 Assets"
@@ -593,11 +659,18 @@
                 <!-- Theme toggle button -->
                 <Button Grid.Column="4" x:Name="ThemeToggleBtn" Click="ThemeToggle_Click"
                         Style="{StaticResource DarkBtn}"
-                        ToolTip="Theme: System" Padding="6,4"
+                        ToolTip="Theme: System"
+                        AutomationProperties.Name="Toggle theme" Padding="6,4"
                         VerticalAlignment="Center" Margin="4,0,0,0">
-                    <TextBlock x:Name="ThemeToggleIcon" Text="&#xE793;"
-                               FontFamily="Segoe MDL2 Assets" FontSize="14"
-                               Foreground="{DynamicResource ThemeText}"/>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="ThemeToggleIcon" Text="&#xE793;"
+                                   FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                   Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBlock x:Name="ThemeToggleLabel" Text="Auto"
+                                   Foreground="{DynamicResource ThemeText}"
+                                   VerticalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
                 </Button>
 
                 <TextBlock Grid.Column="5" x:Name="MasterPwdStatus"
@@ -633,7 +706,8 @@
 
                 <Button Grid.Column="1" Click="About_Click"
                         Style="{StaticResource DarkBtn}"
-                        ToolTip="About NetClipboard" Padding="6,3"
+                        ToolTip="About NetClipboard"
+                        AutomationProperties.Name="About NetClipboard" Padding="6,3"
                         VerticalAlignment="Center" Margin="8,0,0,0">
                     <TextBlock Text="&#xE946;" FontFamily="Segoe MDL2 Assets"
                                FontSize="13" Foreground="{DynamicResource ThemeText}"/>

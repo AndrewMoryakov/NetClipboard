@@ -29,20 +29,25 @@ public partial class MainWindow : Window
     private TrayIcon? _tray;
     private string _lastClipText = "";
     private string _lastClipFile = "";
+    private bool _trayHintShown;
     private string? _masterPassword;
     private DateTime _statusLockedUntil = DateTime.MinValue;
     private const int MaxLocalItems = 200;
     private const int MaxPeerItems = 200;
     private const int StatusHoldSeconds = 4;
+    private const int StatusHoldSecondsLong = 10;
 
     /// <summary>Set a user-facing status that survives the next 4s of background UpdateStatus() ticks.</summary>
     private string StatusMsg
     {
-        set
-        {
-            StatusText.Text = value;
-            _statusLockedUntil = DateTime.Now.AddSeconds(StatusHoldSeconds);
-        }
+        set => SetStatus(value, StatusHoldSeconds);
+    }
+
+    /// <summary>Set a status message and hold it for the given seconds before background ticks may overwrite it.</summary>
+    private void SetStatus(string msg, int holdSeconds)
+    {
+        StatusText.Text = msg;
+        _statusLockedUntil = DateTime.Now.AddSeconds(holdSeconds);
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -90,7 +95,9 @@ public partial class MainWindow : Window
             },
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             BorderThickness = new Thickness(0),
-            Background = Brushes.Transparent
+            Background = Brushes.Transparent,
+            Style = (Style)FindResource("EntryListBox"),
+            Tag = "Copy text or a file to get started."
         };
         ScrollViewer.SetHorizontalScrollBarVisibility(localList, ScrollBarVisibility.Disabled);
         PeerTabs.Items.Add(new TabItem { Header = "My Clipboard", Content = localList });
@@ -155,12 +162,12 @@ public partial class MainWindow : Window
 
     private void UpdateThemeButton()
     {
-        // E793 = brightness/auto, E706 = moon/dark, E706 reuse, E2AD = sun/light
-        (ThemeToggleIcon.Text, ThemeToggleBtn.ToolTip) = ThemeManager.Current switch
+        // E793 = brightness/auto, E708 = moon/dark, E706 = sun/light
+        (ThemeToggleIcon.Text, ThemeToggleLabel.Text, ThemeToggleBtn.ToolTip) = ThemeManager.Current switch
         {
-            AppTheme.Dark   => ("\uE708", "Theme: Dark"),
-            AppTheme.Light  => ("\uE706", "Theme: Light"),
-            _               => ("\uE793", "Theme: System")
+            AppTheme.Dark   => ("\uE708", "Dark", "Theme: Dark"),
+            AppTheme.Light  => ("\uE706", "Light", "Theme: Light"),
+            _               => ("\uE793", "Auto", "Theme: System")
         };
     }
 
@@ -170,9 +177,10 @@ public partial class MainWindow : Window
         foreach (var (id, parts) in _peerHeaderParts)
         {
             var online = _peers.TryGetValue(id, out var peer) && peer.IsOnline;
-            parts.dot.Fill = online ? Brush("ThemeGreen") : Brush("ThemeSurface2");
+            parts.dot.Fill = online ? Brush("ThemeGreen") : Brush("ThemeOverlay0");
+            parts.dot.ToolTip = online ? "Online" : "Offline";
             parts.badge.Foreground = Brush("ThemeBadgeText");
-            parts.badge.Background = Brush("ThemeRed");
+            parts.badge.Background = Brush("ThemeMauve");
             parts.name.Foreground = Brush("ThemeText");
         }
 
@@ -294,17 +302,40 @@ public partial class MainWindow : Window
             CaretBrush = Brush("ThemeText")
         };
         sp.Children.Add(tb);
+
         var btn = new Button
         {
             Content = "Connect",
-            HorizontalAlignment = HorizontalAlignment.Right,
+            IsDefault = true,
             Padding = new Thickness(16, 4, 16, 4),
             Background = Brush("ThemeSurface0"),
             Foreground = Brush("ThemeText"),
             BorderBrush = Brush("ThemeSurface2")
         };
+        System.Windows.Automation.AutomationProperties.SetName(btn, "Connect to peer");
         btn.Click += (_, _) => dlg.DialogResult = true;
-        sp.Children.Add(btn);
+
+        var cancelBtn = new Button
+        {
+            Content = "Cancel",
+            IsCancel = true,
+            Padding = new Thickness(16, 4, 16, 4),
+            Margin = new Thickness(8, 0, 0, 0),
+            Background = Brush("ThemeSurface0"),
+            Foreground = Brush("ThemeText"),
+            BorderBrush = Brush("ThemeSurface2")
+        };
+        System.Windows.Automation.AutomationProperties.SetName(cancelBtn, "Cancel");
+        cancelBtn.Click += (_, _) => dlg.DialogResult = false;
+
+        var btnRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        btnRow.Children.Add(btn);
+        btnRow.Children.Add(cancelBtn);
+        sp.Children.Add(btnRow);
 
         // Direct peers management
         var peers = _net.GetDirectPeers();
@@ -362,6 +393,7 @@ public partial class MainWindow : Window
             Cursor = System.Windows.Input.Cursors.Hand,
             ToolTip = $"Stop unicasting to {ip}"
         };
+        System.Windows.Automation.AutomationProperties.SetName(removeBtn, $"Stop unicasting to {ip}");
         DockPanel.SetDock(removeBtn, Dock.Right);
         removeBtn.Click += (_, _) =>
         {
@@ -482,7 +514,9 @@ public partial class MainWindow : Window
         var results = await Task.WhenAll(sendTasks);
 
         var label = encrypted ? "encrypted text" : "text";
-        StatusMsg = FormatSendOutcome(label, results, ownCancelled: false);
+        var anyFailed = results.Any(r => !r.Item2.ok);
+        SetStatus(FormatSendOutcome(label, results, ownCancelled: false),
+            anyFailed ? StatusHoldSecondsLong : StatusHoldSeconds);
     }
 
     private async Task<(bool ok, string? reason)> TrySendText(
@@ -541,7 +575,7 @@ public partial class MainWindow : Window
         }
         else
         {
-            StatusMsg = "Wrong password";
+            SetStatus("Wrong password", StatusHoldSecondsLong);
         }
     }
 
@@ -603,7 +637,10 @@ public partial class MainWindow : Window
             {
                 peer.IsOnline = true;
                 if (_peerHeaderParts.TryGetValue(msg.SenderId, out var dotParts))
+                {
                     dotParts.dot.Fill = Brush("ThemeGreen");
+                    dotParts.dot.ToolTip = "Online";
+                }
             }
 
             var entry = new ClipboardEntry
@@ -660,7 +697,9 @@ public partial class MainWindow : Window
             },
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             BorderThickness = new Thickness(0),
-            Background = Brushes.Transparent
+            Background = Brushes.Transparent,
+            Style = (Style)FindResource("EntryListBox"),
+            Tag = "No items received yet."
         };
         ScrollViewer.SetHorizontalScrollBarVisibility(listBox, ScrollBarVisibility.Disabled);
 
@@ -670,7 +709,8 @@ public partial class MainWindow : Window
             Width = 8, Height = 8,
             Fill = Brush("ThemeGreen"),
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 5, 0)
+            Margin = new Thickness(0, 0, 5, 0),
+            ToolTip = "Online"
         };
         var nameBlock = new TextBlock
         {
@@ -682,7 +722,7 @@ public partial class MainWindow : Window
         {
             FontSize = 10, FontWeight = FontWeights.Bold,
             Foreground = Brush("ThemeBadgeText"),
-            Background = Brush("ThemeRed"),
+            Background = Brush("ThemeMauve"),
             Padding = new Thickness(4, 1, 4, 1),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(5, 0, 0, 0),
@@ -713,7 +753,8 @@ public partial class MainWindow : Window
             peer.IsOnline = online;
             if (_peerHeaderParts.TryGetValue(id, out var parts))
             {
-                parts.dot.Fill = online ? Brush("ThemeGreen") : Brush("ThemeSurface2");
+                parts.dot.Fill = online ? Brush("ThemeGreen") : Brush("ThemeOverlay0");
+                parts.dot.ToolTip = online ? "Online" : "Offline";
             }
         }
         UpdateStatus();
@@ -885,6 +926,12 @@ public partial class MainWindow : Window
         {
             e.Cancel = true;
             Hide();
+            if (!_trayHintShown)
+            {
+                _trayHintShown = true;
+                _tray?.ShowBalloon("NetClipboard",
+                    "Still running in the tray. Right-click the tray icon to exit.");
+            }
             return;
         }
 
@@ -953,7 +1000,9 @@ public partial class MainWindow : Window
                 (peer.Name, await TrySendFile(peer, path, transferId, token, cts))
             ).ToList();
             var results = await Task.WhenAll(sendTasks);
-            StatusMsg = FormatSendOutcome(fileEntry.FileName, results, cts.IsCancellationRequested);
+            var anyFailed = !cts.IsCancellationRequested && results.Any(r => !r.Item2.ok);
+            SetStatus(FormatSendOutcome(fileEntry.FileName, results, cts.IsCancellationRequested),
+                anyFailed ? StatusHoldSecondsLong : StatusHoldSeconds);
         }
         finally
         {
@@ -1053,7 +1102,10 @@ public partial class MainWindow : Window
             {
                 peer.IsOnline = true;
                 if (_peerHeaderParts.TryGetValue(f.SenderId, out var dotParts))
+                {
                     dotParts.dot.Fill = Brush("ThemeGreen");
+                    dotParts.dot.ToolTip = "Online";
+                }
             }
 
             var entry = new ClipboardFileEntry
@@ -1127,9 +1179,10 @@ public partial class MainWindow : Window
             if (!_incomingFiles.TryGetValue(f.FileId, out var entry)) return;
             entry.Reason = f.Reason;
             entry.IsFailed = true;
-            StatusMsg = f.Reason == "Cancelled"
-                ? $"Cancelled {entry.FileName}"
-                : $"Failed to receive {entry.FileName}: {f.Reason}";
+            if (f.Reason == "Cancelled")
+                StatusMsg = $"Cancelled {entry.FileName}";
+            else
+                SetStatus($"Failed to receive {entry.FileName}: {f.Reason}", StatusHoldSecondsLong);
         });
     }
 
@@ -1180,7 +1233,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            StatusMsg = $"Save failed: {ex.Message}";
+            SetStatus($"Save failed: {ex.Message}", StatusHoldSecondsLong);
         }
     }
 }
